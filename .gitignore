@@ -1,0 +1,10 @@
+.idea/
+.vscode/
+
+*.o
+
+mlp
+!mlp/
+
+test_*
+!test_*.cpp
