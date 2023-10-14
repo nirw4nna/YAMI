@@ -4,6 +4,22 @@ from torch.nn import functional as F
 import math
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from bpe import Encoder
+import ctypes
+
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).parent.parent))
+# Simple trick to import a file from outside the default path.
+# To enable Pylance add this also to "Python > Analysis > Extra Paths"
+from convert_to_yami import export_model, YamiHparams
+
+class GPT2Params(YamiHparams):
+    _fields_ = [('n_layers', ctypes.c_uint32),
+                ('n_heads', ctypes.c_uint32),
+                ('emb_size', ctypes.c_uint32),
+                ('block_size', ctypes.c_uint32),
+                ('vocab_size', ctypes.c_uint32),]
 
 """
 GPT-2 small:
@@ -184,6 +200,14 @@ class GPT(nn.Module):
 if __name__ == '__main__':
     gpt = GPT.from_hf()
     # gpt = GPT2LMHeadModel.from_pretrained(MODEL_TYPE)
+    # hparams = GPT2Params()
+    # hparams.n_layers = N_LAYERS
+    # hparams.n_heads = N_HEADS
+    # hparams.emb_size = EMB_SIZE
+    # hparams.block_size = BLOCK_SIZE
+    # hparams.vocab_size = VOCAB_SIZE
+
+    # export_model(gpt.state_dict(), hparams, "gpt2.yami")
     gpt.eval()
     # tokenizer = GPT2Tokenizer.from_pretrained(MODEL_TYPE)
     tokenizer = Encoder.from_pretrained()
@@ -192,6 +216,6 @@ if __name__ == '__main__':
         # encoded_proompt = tokenizer(proompt, return_tensors='pt')
         encoded_proompt = [tokenizer.encode(proompt)]
         # idx = encoded_proompt['input_ids']
-        idx = torch.tensor(encoded_proompt)
+        idx = torch.tensor([[1, 2, 3]])
         resp = tokenizer.decode(gpt.generate(idx, max_new_tokens=50).cpu().squeeze().tolist())
         print(f'YAMI-GPT2: {resp}\n')

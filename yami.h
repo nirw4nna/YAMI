@@ -6,7 +6,7 @@
 #include <string>
 #include <string_view>
 #include <cstring>
-#include <vector>
+#include <unordered_map>
 #include <ctime>
 
 #ifdef __AVX2__
@@ -26,7 +26,6 @@
 #endif
 
 constexpr static int yami_max_dimensions = 4;
-constexpr static int yami_max_label = 64; // todo: remove
 
 static inline int64_t yami_get_time_us() noexcept {
     timespec ts{};
@@ -52,14 +51,30 @@ struct yami_tensor {
     float *data;
 };
 
+extern yami_tensor *yami_new_tensor2d(uint32_t d1, uint32_t d2, std::string_view label) noexcept;
+extern yami_tensor *copy_of(const yami_tensor *t) noexcept;
+
 // Helper class that just reads a yami file and returns an array of tensors
-extern std::vector<yami_tensor *> yami_load_from_file(std::string_view yami_file);
+extern std::unordered_map<std::string, yami_tensor *> yami_load_from_file(std::string_view yami_file, void *hparams, int hparams_size);
 
 // out = xa @ xb
-extern void yami_mat_mul(yami_tensor *out, const yami_tensor *xa, const yami_tensor *xb) noexcept;
+extern void yami_mat_mul(float *__restrict out, const float *__restrict xa,
+                         const float *__restrict xb, int nra, int nca, int ncb) noexcept;
 // xa += xb
 extern void yami_add(float *__restrict xa, const float *__restrict xb, size_t n) noexcept;
+// xa += c for each element of xa
+extern void yami_add(float *__restrict xa, float c, size_t n) noexcept;
+// xa *= xb
+extern void yami_mul(float *__restrict xa, const float *__restrict xb, size_t n) noexcept;
+// xa *= c for each element of xa
+extern void yami_mul(float *__restrict xa, float c, size_t n) noexcept;
+// xa /= c for each element of xa
+extern void yami_div(float *__restrict xa, float c, size_t n) noexcept;
+
 // xa = tanh(xa)
 extern void yami_tanh(float *xa, size_t n) noexcept;
 extern void yami_softmax(float *xa, size_t n) noexcept;
 extern void yami_transpose(yami_tensor *t) noexcept;
+extern void yami_get_embeddings(yami_tensor *dst_emb, const yami_tensor *emb_table, const int *ctx, int ctx_size) noexcept;
+extern float yami_sum(const yami_tensor *x) noexcept;
+extern void yami_norm(yami_tensor *x, const yami_tensor *w, const yami_tensor *b) noexcept;

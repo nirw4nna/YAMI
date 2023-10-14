@@ -3,7 +3,8 @@
 #include <fcntl.h>
 #include <cmath>
 
-constexpr static uint8_t yami_magic[3] = {0x1A, 0xAA, 0x1F};
+// "YAMIF" in little endian
+constexpr static uint32_t yami_magic = 0x001FAA1A;
 
 yami_tensor::yami_tensor(int n_dim, const uint32_t *dim, std::string_view label) : n_dim(n_dim), label(label) {
     ::memcpy(this->dimensions, dim, n_dim * sizeof(uint32_t));
@@ -21,7 +22,18 @@ yami_tensor::~yami_tensor() {
     free(this->data);
 }
 
-std::vector<yami_tensor *> yami_load_from_file(std::string_view yami_file) {
+yami_tensor *yami_new_tensor2d(uint32_t d1, uint32_t d2, std::string_view label) noexcept {
+    uint32_t dims[2] = {d1, d2};
+    return new yami_tensor(2, dims, label);
+}
+
+yami_tensor *copy_of(const yami_tensor *t) noexcept {
+    auto *cpy = new yami_tensor(t->n_dim, t->dimensions, t->label);
+    memcpy(cpy->data, t->data, t->ne * sizeof(float));
+    return cpy;
+}
+
+std::unordered_map<std::string, yami_tensor *> yami_load_from_file(std::string_view yami_file, void *hparams, int hparams_size) {
     FILE *f = fopen(yami_file.data(), "rb");
     if (f == nullptr) {
         fprintf(stderr, "Error opening %s\n", yami_file.data());
@@ -29,11 +41,11 @@ std::vector<yami_tensor *> yami_load_from_file(std::string_view yami_file) {
     }
 
     // check the header
-    uint8_t buff[3];
+    uint32_t head = 0;
     size_t n;
-    n = fread(buff, 1, 3, f);
-    if (n != 3 || ::memcmp(yami_magic, buff, 3) != 0) {
-        fprintf(stderr, "Wrong header\n");
+    n = fread(&head, 1, 3, f);
+    if (n != 3 || yami_magic != head) {
+        fprintf(stderr, "Wrong header %08X\n", head);
         fclose(f);
         exit(EXIT_FAILURE);
     }
@@ -51,39 +63,47 @@ std::vector<yami_tensor *> yami_load_from_file(std::string_view yami_file) {
     const auto *ptr = (const uint8_t *)data;
     ptr += 3; // skip the magic number
 
+    const auto hp_size = static_cast<int>(*(const uint16_t *)ptr);
+    if (hp_size != hparams_size) {
+        fprintf(stderr, "Error reading the hyperparameters, expected size is %d but got %d\n", hparams_size, hp_size);
+        exit(EXIT_FAILURE);
+    }
+    ptr += 2;
+    memcpy(hparams, ptr, hparams_size);
+    ptr += hparams_size;
+
     const auto n_tensors = static_cast<int>(*(const uint16_t *)ptr);
     ptr += 2;
 
-    std::vector<yami_tensor *> tensors(n_tensors);
+    std::unordered_map<std::string, yami_tensor *> tensors;
     for (int i = 0; i < n_tensors; ++i) {
+        const auto label_size = static_cast<int>(*(const uint16_t *)ptr);
+        ptr += 2;
         const auto *label = (const char *)ptr;
-        ptr += yami_max_label + 1;
+        ptr += label_size + 1;
         const auto n_dim = static_cast<int>(ptr[0]);
         ptr++;
         const auto dim = (const uint32_t *) ptr;
         ptr += yami_max_dimensions * sizeof(uint32_t);
-        const auto data_size = static_cast<size_t>((*(const uint32_t *)ptr) * sizeof(float));
-        ptr += 4;
+        const auto data_size = static_cast<uint64_t>((*(const uint64_t *)ptr) * sizeof(float));
+        ptr += 8;
 
         auto *t = new yami_tensor(n_dim, dim, label);
         memcpy(t->data, ptr, data_size);
         ptr += data_size;
-        tensors[i] = t;
+        tensors[t->label] = t;
     }
     munmap(data, file_size);
     return tensors;
 }
 
 // first, very much naive, implementation to be used as a baseline
-void yami_mat_mul(yami_tensor *out, const yami_tensor *xa, const yami_tensor *xb) noexcept {
-    const auto rows_a = xa->dimensions[0];
-    const auto cols_a = xa->dimensions[1];
-    const auto cols_b = xb->dimensions[1];
-
-    for (uint32_t i = 0; i < rows_a; ++i) {
-        for (uint32_t k = 0; k < cols_a; ++k) {
-            for (uint32_t j = 0; j < cols_b; ++j) {
-                out->data[i*cols_b + j] += xa->data[i*cols_a + k] * xb->data[k*cols_b + j];
+void yami_mat_mul(float *__restrict out, const float *__restrict xa,
+                         const float *__restrict xb, const int nra, const int nca, const int ncb) noexcept {
+    for (int i = 0; i < nra; ++i) {
+        for (int k = 0; k < nca; ++k) {
+            for (int j = 0; j < ncb; ++j) {
+                out[i*ncb + j] += xa[i*nca + k] * xb[k*ncb + j];
             }
         }
     }
@@ -95,7 +115,32 @@ void yami_add(float *__restrict xa, const float *__restrict xb, size_t n) noexce
     }
 }
 
-void yami_tanh(float *xa, size_t n) noexcept {
+void yami_add(float *__restrict xa, const float c, size_t n) noexcept {
+    for (size_t i = 0; i < n; ++i) {
+        xa[i] += c;
+    }
+}
+
+
+void yami_mul(float *__restrict xa, const float *__restrict xb, size_t n) noexcept {
+    for (size_t i = 0; i < n; ++i) {
+        xa[i] *= xb[i];
+    } 
+}
+
+void yami_mul(float *__restrict xa, const float c, size_t n) noexcept {
+    for (size_t i = 0; i < n; ++i) {
+        xa[i] *= c;
+    }
+}
+
+void yami_div(float *__restrict xa, const float c, size_t n) noexcept {
+    for (size_t i = 0; i < n; ++i) {
+        xa[i] /= c;
+    }
+}
+
+void yami_tanh(float *xa, const size_t n) noexcept {
     for (size_t i = 0; i < n; ++i) {
         const auto e_p = std::exp(xa[i]);
         const auto e_n = std::exp(-xa[i]);
@@ -103,7 +148,7 @@ void yami_tanh(float *xa, size_t n) noexcept {
     }
 }
 
-void yami_softmax(float *xa, size_t n) noexcept {
+void yami_softmax(float *xa, const size_t n) noexcept {
     auto den = 0.f;
 
     for (size_t i = 0; i < n; ++i) {
@@ -140,4 +185,44 @@ void yami_transpose(yami_tensor *t) noexcept {
         t->dimensions[i] = t->dimensions[last_idx - i];
         t->dimensions[last_idx - i] = el;
     }
+}
+
+void yami_get_embeddings(yami_tensor *dst_emb, const yami_tensor *emb_table, const int *ctx, const int ctx_size) noexcept {
+    YAMI_ASSERT(emb_table->n_dim == 2);
+    const auto emb_size = emb_table->dimensions[1];
+    YAMI_ASSERT(dst_emb->ne >= (ctx_size * emb_size));
+
+    for (int i = 0; i < ctx_size; ++i) {
+        YAMI_ASSERT(ctx[i] < static_cast<int>(emb_table->dimensions[0]));
+        memcpy(dst_emb->data + (i*emb_size),
+               emb_table->data + (ctx[i]*emb_size),
+               emb_size * sizeof(float)
+        );
+    }
+}
+// Accumulate all the elements in the tensor x
+// Note: it's probably better to accumulate over a given dimension
+float yami_sum(const yami_tensor *x) noexcept {
+    float acc = 0.f;
+    for (size_t i = 0; i < x->ne; ++i) acc += x->data[i];
+    return acc;
+}
+
+void yami_norm(yami_tensor *x, const yami_tensor *w, const yami_tensor *b) noexcept {
+    constexpr static auto eps = 1.e-5f;
+
+    const auto x_elements = x->ne;
+    YAMI_ASSERT(x_elements == w->ne && x_elements == b->ne);
+    
+    const auto n_inv = 1.f / static_cast<float>(x_elements);
+    const auto mean = yami_sum(x) * n_inv;
+    auto var_scaled = 0.f;
+    for (size_t i = 0; i < x_elements; ++i) var_scaled += ((x->data[i] - mean) * (x->data[i] - mean));
+    var_scaled *= n_inv;
+    var_scaled = std::sqrt(var_scaled + eps);
+
+    yami_add(x->data, -mean, x_elements);
+    yami_div(x->data, var_scaled, x_elements);
+    yami_mul(x->data, w->data, x_elements);
+    yami_add(x->data, b->data, x_elements);
 }
