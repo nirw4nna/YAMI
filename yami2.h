@@ -55,7 +55,15 @@ extern "C" {
     struct yami_tensor {
         int n_dim;
         size ne;
+        // The shape of this tensor.
         size dimensions[yami_max_dims];
+        // The shape of this tensor in its complete form, for example a 1D tensor T of 4 elements
+        // will have T.dimensions = [4, 0, 0, 0] and T.extended_dim = [1, 1, 1, 4].
+        // This information is used when broadcasting the tensor.
+        size extended_dim[yami_max_dims];
+        // Stride for a given dimension expressed in number of f32.
+        // For example: given a tensor T with dimensions [2, 3, 2, 2] T.stride[3] = 1, T.stride[1] = 2*2
+        size stride[yami_max_dims];
         char label[yami_max_label];
         f32 *data;
     };
@@ -88,5 +96,8 @@ extern "C" {
     extern yami_tensor *yami_matmul(yami_context *ctx,
                                     const yami_tensor *xa,
                                     const yami_tensor *xb) noexcept;
+    extern yami_tensor *yami_add(yami_context *ctx,
+                                 const yami_tensor *xa,
+                                 const yami_tensor *xb) noexcept;
     // ========================================================================
 }

@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 
 *.o
+*.so
 
 mlp
 gpt2

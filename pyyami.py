@@ -62,6 +62,8 @@ class yami_tensor(Structure):
         ('n_dim', c_int),
         ('ne', c_int64),
         ('dimensions', c_int64 * YAMI_MAX_DIMS),
+        ('extended_dim', c_int64 * YAMI_MAX_DIMS),
+        ('stride', c_int64 * YAMI_MAX_DIMS),
         ('label', c_char * YAMI_MAX_LABEL),
         ('data', c_float_p),
     ]
@@ -218,3 +220,14 @@ def yami_matmul(ctx: YamiContext, xa: YamiTensor, xb: YamiTensor) -> YamiTensor:
 
 _lib.yami_matmul.argtypes = [yami_context_p, yami_tensor_p, yami_tensor_p]
 _lib.yami_matmul.restype = yami_tensor_p
+
+
+# extern yami_tensor *yami_add(yami_context *ctx,
+#                              const yami_tensor *xa,
+#                              const yami_tensor *xb) noexcept;
+def yami_add(ctx: YamiContext, xa: YamiTensor, xb: YamiTensor) -> YamiTensor:
+    return YamiTensor(_lib.yami_add(ctx, xa, xb))
+
+
+_lib.yami_add.argtypes = [yami_context_p, yami_tensor_p, yami_tensor_p]
+_lib.yami_add.restype = yami_tensor_p
