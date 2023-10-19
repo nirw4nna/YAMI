@@ -89,7 +89,8 @@ extern "C" {
     extern yami_tensor *yami_tensor_4d(yami_context *ctx, const char *label,
                                        size dim1, size dim2,
                                        size dim3, size dim4) noexcept;
-    extern yami_tensor *yami_clone(yami_context *ctx, const yami_tensor *x) noexcept;
+    extern yami_tensor *yami_clone(yami_context *ctx,
+                                   const yami_tensor *x) noexcept;
     // ========================================================================
 
     // =========================== Tensor Operations ==========================
@@ -99,5 +100,31 @@ extern "C" {
     extern yami_tensor *yami_add(yami_context *ctx,
                                  const yami_tensor *xa,
                                  const yami_tensor *xb) noexcept;
+    extern yami_tensor *yami_sub(yami_context *ctx,
+                                 const yami_tensor *xa,
+                                 const yami_tensor *xb) noexcept;
+    extern yami_tensor *yami_mul(yami_context *ctx,
+                                 const yami_tensor *xa,
+                                 const yami_tensor *xb) noexcept;
+    extern yami_tensor *yami_div(yami_context *ctx,
+                                 const yami_tensor *xa,
+                                 const yami_tensor *xb) noexcept;
+    // ========================================================================
+
+    // ============================ Math Functions ============================
+    extern yami_tensor *yami_tanh(yami_context *ctx,
+                                  yami_tensor *x,
+                                  bool in_place = true) noexcept;
+    extern yami_tensor *yami_gelu(yami_context *ctx,
+                                  yami_tensor *x,
+                                  bool in_place = true) noexcept;
+    extern yami_tensor *yami_sum(yami_context *ctx,
+                                 const yami_tensor *x, int dim) noexcept;
+    extern yami_tensor *yami_exp(yami_context *ctx,
+                                 yami_tensor *x, bool in_place = true) noexcept;
+    extern yami_tensor *yami_max(yami_context *ctx,
+                                 const yami_tensor *x, int dim) noexcept;
+    extern yami_tensor *yami_softmax(yami_context *ctx, const yami_tensor *x,
+                                     int dim) noexcept;
     // ========================================================================
 }

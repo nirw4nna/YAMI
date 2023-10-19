@@ -1,5 +1,4 @@
 import os
-import sys
 import numpy as np
 import ctypes
 from ctypes import (
@@ -231,3 +230,87 @@ def yami_add(ctx: YamiContext, xa: YamiTensor, xb: YamiTensor) -> YamiTensor:
 
 _lib.yami_add.argtypes = [yami_context_p, yami_tensor_p, yami_tensor_p]
 _lib.yami_add.restype = yami_tensor_p
+
+
+# extern yami_tensor *yami_mul(yami_context *ctx,
+#                              const yami_tensor *xa,
+#                              const yami_tensor *xb) noexcept;
+def yami_mul(ctx: YamiContext, xa: YamiTensor, xb: YamiTensor) -> YamiTensor:
+    return YamiTensor(_lib.yami_mul(ctx, xa, xb))
+
+
+_lib.yami_mul.argtypes = [yami_context_p, yami_tensor_p, yami_tensor_p]
+_lib.yami_mul.restype = yami_tensor_p
+
+
+# extern yami_tensor *yami_div(yami_context *ctx,
+#                              const yami_tensor *xa,
+#                              const yami_tensor *xb) noexcept;
+def yami_div(ctx: YamiContext, xa: YamiTensor, xb: YamiTensor) -> YamiTensor:
+    return YamiTensor(_lib.yami_div(ctx, xa, xb))
+
+
+_lib.yami_div.argtypes = [yami_context_p, yami_tensor_p, yami_tensor_p]
+_lib.yami_div.restype = yami_tensor_p
+
+
+# extern yami_tensor *yami_tanh(yami_context *ctx,
+#                               yami_tensor *x,
+#                               bool in_place = true) noexcept;
+def yami_tanh(ctx: YamiContext, x: YamiTensor, in_place: c_bool = True) -> YamiTensor:
+    return YamiTensor(_lib.yami_tanh(ctx, x, in_place))
+
+
+_lib.yami_tanh.argtypes = [yami_context_p, yami_tensor_p, c_bool]
+_lib.yami_tanh.restype = yami_tensor_p
+
+
+# extern yami_tensor *yami_gelu(yami_context *ctx,
+#                               yami_tensor *x,
+#                               bool in_place = true) noexcept;
+def yami_gelu(ctx: YamiContext, x: YamiTensor, in_place: c_bool = True) -> YamiTensor:
+    return YamiTensor(_lib.yami_gelu(ctx, x, in_place))
+
+
+_lib.yami_gelu.argtypes = [yami_context_p, yami_tensor_p, c_bool]
+_lib.yami_gelu.restype = yami_tensor_p
+
+
+# extern yami_tensor *yami_softmax(yami_context *ctx,
+#                                  yami_tensor *x, int dim) noexcept;
+def yami_softmax(ctx: YamiContext, x: YamiTensor, dim: c_int) -> YamiTensor:
+    return YamiTensor(_lib.yami_softmax(ctx, x, dim))
+
+
+_lib.yami_softmax.argtypes = [yami_context_p, yami_tensor_p, c_int]
+_lib.yami_softmax.restype = yami_tensor_p
+
+
+# extern yami_tensor *yami_sum(yami_context *ctx,
+#                              const yami_tensor *x, int dim) noexcept;
+def yami_sum(ctx: YamiContext, x: YamiTensor, dim: c_int) -> YamiTensor:
+    return YamiTensor(_lib.yami_sum(ctx, x, dim))
+
+
+_lib.yami_sum.argtypes = [yami_context_p, yami_tensor_p, c_int]
+_lib.yami_sum.restype = yami_tensor_p
+
+
+# extern yami_tensor *yami_max(yami_context *ctx,
+#                              const yami_tensor *x, int dim) noexcept;
+def yami_max(ctx: YamiContext, x: YamiTensor, dim: c_int) -> YamiTensor:
+    return YamiTensor(_lib.yami_max(ctx, x, dim))
+
+
+_lib.yami_max.argtypes = [yami_context_p, yami_tensor_p, c_int]
+_lib.yami_max.restype = yami_tensor_p
+
+
+# extern yami_tensor *yami_exp(yami_context *ctx,
+#                              const yami_tensor *x, int dim) noexcept;
+def yami_exp(ctx: YamiContext, x: YamiTensor, in_place: c_bool = True) -> YamiTensor:
+    return YamiTensor(_lib.yami_exp(ctx, x, in_place))
+
+
+_lib.yami_exp.argtypes = [yami_context_p, yami_tensor_p, c_bool]
+_lib.yami_exp.restype = yami_tensor_p
