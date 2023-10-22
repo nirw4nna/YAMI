@@ -1,6 +1,5 @@
 #TEST_TARGETS = tests/test_matmul
 
-
 CXX			=	g++
 CXXFLAGS	=	-std=c++17 -Wall -Wextra -Wformat -Wnoexcept -Wcast-qual -fno-exceptions -fno-rtti -Wunused -Wdouble-promotion
 
@@ -55,14 +54,17 @@ pyyami: yami2.cpp
 clean:
 	rm -rf *.o *.so $(TEST_TARGETS) mlp gpt2 main
 
-yami.o: yami.cpp yami.h
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+#yami.o: yami.cpp yami.h
+#	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 yami2.o: yami2.cpp yami2.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-mlp: mlp.cpp yami.o
-	$(CXX) $(CXXFLAGS) $< -o $@ yami.o $(LDFLAGS)
+main: main.cpp yami2.o
+	$(CXX) $(CXXFLAGS) $< -o $@ yami2.o
 
-gpt2: gpt2.cpp yami.o
-	$(CXX) $(CXXFLAGS) $< -o $@ yami.o $(LDFLAGS)
+#mlp: mlp.cpp yami.o
+#	$(CXX) $(CXXFLAGS) $< -o $@ yami.o $(LDFLAGS)
+#
+#gpt2: gpt2.cpp yami.o
+#	$(CXX) $(CXXFLAGS) $< -o $@ yami.o $(LDFLAGS)

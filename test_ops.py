@@ -430,3 +430,24 @@ def test_exp():
         ctx.clear()
 
 
+def test_transpose():
+    ctx = YamiContext(1024*1024*30)
+    for step in range(TEST_STEPS):
+        print(f'\n================================ test_transpose {step+1}/{TEST_STEPS} ================================\n')
+        n = randint(2, 50)
+        m = randint(2, 50)
+        k = randint(2, 50)
+        j = randint(2, 50)
+        target_a = torch.tensor(random_ndarray(k, n, m, j))
+        for a1 in range(-4, 4, 1):
+            for a2 in range(-4, 4, 1):
+                print(f'\n>>> Transpose axis ({a1}, {a2}) of a {target_a.shape} <<<\n')
+                target_res = target_a.transpose(a1, a2)
+                my_a = YamiTensor.from_np(ctx, 'my_a', target_a.numpy())
+
+                my_res = yami_transpose(ctx, my_a, a1, a2)
+
+                assert all_close(my_res.as_np(), target_res.numpy())
+
+                ctx.report_usage()
+                ctx.clear()

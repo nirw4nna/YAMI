@@ -5,9 +5,9 @@ Yet Another Machine Inference framework
 **YAMI2:**
 - ~~matmul up to 4 dim~~
 - ~~add, addv, mul, mulv, div, divv~~
-- >view (reshape)
-- >transpose
-- mask
+- ~~view (reshape)~~
+- ~~transpose~~
+- >mask
 - ~~tanh~~
 - ~~softmax~~
 - ~~GELU~~

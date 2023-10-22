@@ -164,6 +164,9 @@ class YamiTensor:
 
         return np.ctypeslib.as_array(t.data, shape=tuple(dim_arr))
 
+    def reshape(self, *dims: int):
+        yami_reshape(self, *dims)
+
     def from_param(self):
         return self._tensor_p
 
@@ -208,6 +211,27 @@ def yami_tensor_4d(ctx: YamiContext, label: c_char_p, dim1: c_int64, dim2: c_int
 
 _lib.yami_tensor_4d.argtypes = [yami_context_p, c_char_p, c_int64, c_int64, c_int64, c_int64]
 _lib.yami_tensor_4d.restype = yami_tensor_p
+
+
+# extern void yami_reshape(yami_tensor *x, int n_dims...) noexcept;
+def yami_reshape(x: YamiTensor, *dims: c_int64) -> YamiTensor:
+    return _lib.yami_reshape(x, len(dims), *dims)
+
+
+_lib.yami_reshape.argtypes = [yami_tensor_p, c_int]
+_lib.yami_reshape.restype = yami_tensor_p
+
+
+# extern yami_tensor *yami_transpose(yami_context *ctx,
+#                                    yami_tensor *x,
+#                                    int dim1 = -1,  int dim2 = -2,
+#                                    bool in_place = false) noexcept;
+def yami_transpose(ctx: YamiContext, x: YamiTensor, dim1: int = -1, dim2: int = -2) -> YamiTensor:
+    return YamiTensor(_lib.yami_transpose(ctx, x, dim1, dim2))
+
+
+_lib.yami_transpose.argtypes = [yami_context_p, yami_tensor_p, c_int, c_int]
+_lib.yami_transpose.restype = yami_tensor_p
 
 
 # extern yami_tensor *yami_matmul(yami_context *ctx,

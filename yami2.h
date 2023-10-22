@@ -7,18 +7,17 @@
 
 #define YAMI_LOG_INFO(format, ...)  fprintf(stdout, "%s: " format"\n",__func__, ##__VA_ARGS__)
 #define YAMI_LOG_ERR(format, ...)   fprintf(stderr, "%s: " format"\n",__func__, ##__VA_ARGS__)
+#define YAMI_ASSERT(x)  \
+    do{                 \
+        if (!(x)) {     \
+            fprintf(stderr, "YAMI_ASSERT: %s:%d %s\n", __FILE__, __LINE__, #x); \
+            exit(EXIT_FAILURE);                                                 \
+        } \
+    } while(0)
 
 #ifdef YAMI_DEBUG
 #   define YAMI_LOG_DEBUG(format, ...) YAMI_LOG_INFO(format, ##__VA_ARGS__)
-#   define YAMI_ASSERT(x) \
-       do{                \
-            if (!(x)) {      \
-                fprintf(stderr, "YAMI_ASSERT: %s:%d %s\n", __FILE__, __LINE__, #x); \
-                exit(EXIT_FAILURE);                                                 \
-            }                   \
-       } while(0)
 #else
-#   define YAMI_ASSERT(x)               ((void) 0)
 #   define YAMI_LOG_DEBUG(format, ...)  ((void) 0)
 #endif
 
@@ -91,6 +90,22 @@ extern "C" {
                                        size dim3, size dim4) noexcept;
     extern yami_tensor *yami_clone(yami_context *ctx,
                                    const yami_tensor *x) noexcept;
+    // Reshape tensor x to the new dimensions.
+    // If the new dimensions are compatible with the old ones x will be updated,
+    // otherwise this is a NOP.
+    // The dimensions must be all explicit and must result in the same number of elements
+    // of x (e.g. if you have a 3x4 matrix you can reshape it as a 6x2, but you cannot write -1x2,
+    // nor you can reshape it as a 2x3).
+    extern void yami_reshape(yami_tensor *x, int n_dims...) noexcept;
+    // Transpose dimensions dim1 and dim2 of tensor x.
+    // By default, this function will transpose the last two dimensions of x
+    // in a newly allocated tensor.
+    // Todo: implement the in-place version...
+    extern yami_tensor *yami_transpose(yami_context *ctx,
+                                       yami_tensor *x,
+                                       int dim1 = -1,
+                                       int dim2 = -2,
+                                       bool in_place = false) noexcept;
     // ========================================================================
 
     // =========================== Tensor Operations ==========================
@@ -119,12 +134,16 @@ extern "C" {
                                   yami_tensor *x,
                                   bool in_place = true) noexcept;
     extern yami_tensor *yami_sum(yami_context *ctx,
-                                 const yami_tensor *x, int dim) noexcept;
+                                 const yami_tensor *x,
+                                 int dim) noexcept;
     extern yami_tensor *yami_exp(yami_context *ctx,
-                                 yami_tensor *x, bool in_place = true) noexcept;
+                                 yami_tensor *x,
+                                 bool in_place = true) noexcept;
     extern yami_tensor *yami_max(yami_context *ctx,
-                                 const yami_tensor *x, int dim) noexcept;
-    extern yami_tensor *yami_softmax(yami_context *ctx, const yami_tensor *x,
+                                 const yami_tensor *x,
+                                 int dim) noexcept;
+    extern yami_tensor *yami_softmax(yami_context *ctx,
+                                     const yami_tensor *x,
                                      int dim) noexcept;
     // ========================================================================
 }
