@@ -12,6 +12,7 @@ def all_close(actual, target, eps=1e-5):
     diffs = ~np.isclose(actual, target, atol=eps, rtol=eps, equal_nan=True)
     close = len(actual[diffs]) == 0
     if not close:
+        print(f'Wrong indexes: {np.where(diffs == True)}')
         print(f'My values: {actual[diffs]}\nNP values: {target[diffs]}')
 
     return close
@@ -451,3 +452,23 @@ def test_transpose():
 
                 ctx.report_usage()
                 ctx.clear()
+
+
+def test_mask():
+    ctx = YamiContext(1024*1024*100)
+    for step in range(TEST_STEPS):
+        print(f'\n================================ test_mask {step+1}/{TEST_STEPS} ================================\n')
+        n = randint(2, 50)
+        m = randint(2, 50)
+        k = randint(2, 50)
+        j = randint(2, 50)
+        target_a = torch.ones(j, k, n, m)
+
+        target_res = target_a.masked_fill(torch.tril(target_a) == 0, float('-inf'))
+        my_a = YamiTensor.from_np(ctx, 'my_a', target_a.numpy())
+        my_res = yami_lt_mask(ctx, my_a)
+        my_res_np = my_res.as_np()
+
+        assert all_close(my_res_np, target_res.numpy())
+        ctx.report_usage()
+        ctx.clear()

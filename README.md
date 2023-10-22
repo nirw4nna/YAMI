@@ -7,7 +7,7 @@ Yet Another Machine Inference framework
 - ~~add, addv, mul, mulv, div, divv~~
 - ~~view (reshape)~~
 - ~~transpose~~
-- >mask
+- ~~mask~~
 - ~~tanh~~
 - ~~softmax~~
 - ~~GELU~~

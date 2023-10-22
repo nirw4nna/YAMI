@@ -234,6 +234,17 @@ _lib.yami_transpose.argtypes = [yami_context_p, yami_tensor_p, c_int, c_int]
 _lib.yami_transpose.restype = yami_tensor_p
 
 
+# extern yami_tensor *yami_lt_mask(yami_context *ctx,
+#                                  const yami_tensor *x,
+#                                  f32 mask) noexcept;
+def yami_lt_mask(ctx: YamiContext, x: YamiTensor, mask: float = float('-inf')) -> YamiTensor:
+    return YamiTensor(_lib.yami_lt_mask(ctx, x, mask))
+
+
+_lib.yami_lt_mask.argtypes = [yami_context_p, yami_tensor_p, c_float]
+_lib.yami_lt_mask.restype = yami_tensor_p
+
+
 # extern yami_tensor *yami_matmul(yami_context *ctx,
 #                                 const yami_tensor *xa,
 #                                 const yami_tensor *xb) noexcept;

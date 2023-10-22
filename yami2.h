@@ -22,6 +22,7 @@
 #endif
 
 #define YAMI_MAX(x, y)  ((x) > (y) ? (x) : (y))
+#define YAMI_MIN(x, y)  ((x) < (y) ? (x) : (y))
 
 extern "C" {
     using i8 = int8_t;
@@ -106,6 +107,11 @@ extern "C" {
                                        int dim1 = -1,
                                        int dim2 = -2,
                                        bool in_place = false) noexcept;
+    // Returns a tensors which is the lower triangular part of x with the other elements
+    // set to mask. x must be at least a 2D tensor.
+    extern yami_tensor *yami_lt_mask(yami_context *ctx,
+                                     const yami_tensor *x,
+                                     f32 mask) noexcept;
     // ========================================================================
 
     // =========================== Tensor Operations ==========================

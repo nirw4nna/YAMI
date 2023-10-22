@@ -200,10 +200,10 @@ static yami_tensor *yami_new_tensor(yami_context *ctx, const int n_dim,
 
     yami_set_tensor_dim(new_tensor, n_dim, dimensions),
 
-    YAMI_LOG_DEBUG("label=\"%s\" n_dim=%d extended_dim=[%ld, %ld, %ld, %ld] stride=[%ld, %ld, %ld, %ld]",
-                   label, n_dim, new_tensor->extended_dim[0], new_tensor->extended_dim[1], new_tensor->extended_dim[2],
-                   new_tensor->extended_dim[3], new_tensor->stride[0], new_tensor->stride[1], new_tensor->stride[2],
-                   new_tensor->stride[3]);
+            YAMI_LOG_DEBUG("label=\"%s\" n_dim=%d extended_dim=[%ld, %ld, %ld, %ld] stride=[%ld, %ld, %ld, %ld]",
+                           label, n_dim, new_tensor->extended_dim[0], new_tensor->extended_dim[1], new_tensor->extended_dim[2],
+                           new_tensor->extended_dim[3], new_tensor->stride[0], new_tensor->stride[1], new_tensor->stride[2],
+                           new_tensor->stride[3]);
 
     return new_tensor;
 }
@@ -327,6 +327,25 @@ yami_tensor *yami_transpose(yami_context *ctx, yami_tensor *x,
                     const size res_idx = yami_tensor_offset(res, *swap_d_idx[0], *swap_d_idx[1],
                                                             *swap_d_idx[2], *swap_d_idx[3]);
                     res->data[res_idx] = x->data[x_idx];
+                }
+            }
+        }
+    }
+
+    return res;
+}
+
+yami_tensor *yami_lt_mask(yami_context *ctx, const yami_tensor *x, const f32 mask) noexcept {
+    YAMI_ASSERT(x->n_dim >= 2);
+
+    yami_tensor *res = yami_new_tensor(ctx, x->n_dim, x->dimensions);
+
+    for (size d0 = 0; d0 < x->extended_dim[0]; ++d0){
+        for (size d1 = 0; d1 < x->extended_dim[1]; ++d1){
+            for (size d2 = 0; d2 < x->extended_dim[2]; ++d2){
+                for (size d3 = 0; d3 < x->extended_dim[3]; ++d3) {
+                    const size idx = yami_tensor_offset(x, d0, d1, d2, d3);
+                    res->data[idx] = (d3 <= d2) ? x->data[idx] : mask;
                 }
             }
         }
