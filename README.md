@@ -11,6 +11,12 @@ Yet Another Machine Inference framework
 - ~~tanh~~
 - ~~softmax~~
 - ~~GELU~~
+- >**GPT-2!**
+- ~~In-place operations~~
+- Add the possibility to allocate a temporary `yami_tensor`. The easiest and probably the best
+way to do so is to treat the `yami_context` as a sort of stack where you can just call `pop`
+to "free" the last tensor
+
 
 **Extra:**
-- BPE (C++)
+- ~~BPE (C++)~~

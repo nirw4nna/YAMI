@@ -1,7 +1,8 @@
 #TEST_TARGETS = tests/test_matmul
 
 CXX			=	g++
-CXXFLAGS	=	-std=c++17 -Wall -Wextra -Wformat -Wnoexcept -Wcast-qual -fno-exceptions -fno-rtti -Wunused -Wdouble-promotion
+CXXFLAGS	=	-std=c++17 -Wall -Wextra -Wformat -Wnoexcept -Wcast-qual -fno-exceptions \
+				-fno-rtti -Wunused -Wdouble-promotion -Wpadded -Wlogical-op -Wcast-align
 
 UNAME_M	=	$(shell uname -m)
 
@@ -11,9 +12,9 @@ ifeq ($(UNAME_M),$(filter $(UNAME_M),x86_64))
 endif
 
 ifdef YAMI_FAST
-	CXXFLAGS	+=	-Ofast -flto -DYAMI_FAST
+	CXXFLAGS	+= -Ofast -flto -DYAMI_FAST
 else
-	CXXFLAGS	+=	-O0 -g -DYAMI_DEBUG
+	CXXFLAGS	+= -O0 -g -DYAMI_DEBUG
 endif
 
 $(info I YAMI build info: )
@@ -23,9 +24,9 @@ $(info I LDFLAGS:		$(LDFLAGS))
 $(info I CXX:			$(shell $(CXX) --version | head -n 1))
 $(info )
 
-all: clean pyyami
+all: clean pyyami gpt2
 
-.PHONY: clean pyyami
+.PHONY: clean pyyami gpt2
 
 pyyami: yami2.cpp
 	$(CXX) $(CXXFLAGS) -fPIC -shared $< -o yami2.so
@@ -60,11 +61,15 @@ clean:
 yami2.o: yami2.cpp yami2.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-main: main.cpp yami2.o
-	$(CXX) $(CXXFLAGS) $< -o $@ yami2.o
+yami_utils.o: yami_utils.cpp yami_utils.h
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+#main: main.cpp yami2.o yami_tokenizers.o
+#	$(CXX) $(CXXFLAGS) $< -o $@ yami2.o yami_tokenizers.o
 
 #mlp: mlp.cpp yami.o
 #	$(CXX) $(CXXFLAGS) $< -o $@ yami.o $(LDFLAGS)
 #
-#gpt2: gpt2.cpp yami.o
-#	$(CXX) $(CXXFLAGS) $< -o $@ yami.o $(LDFLAGS)
+
+gpt2: gpt2.cpp yami2.o yami_utils.o
+	$(CXX) $(CXXFLAGS) $< -o $@ yami2.o yami_utils.o $(LDFLAGS)

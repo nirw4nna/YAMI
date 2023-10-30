@@ -5,6 +5,8 @@ __pycache__/
 
 *.o
 *.so
+# Exclude YamiFile files
+*.ymf
 
 mlp
 gpt2
