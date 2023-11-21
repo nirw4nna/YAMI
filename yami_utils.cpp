@@ -341,7 +341,7 @@ void yami_load_model(yami_context *ctx, yami_model *model, const char *yami_file
     fseek(f, 0, SEEK_END);
     const size file_size = ftell(f);
 
-    YAMI_LOG_DEBUG("loading %ld MB from file \"%s\"", (size) YAMI_B_TO_MB(file_size), yami_file);
+    YAMI_LOG_DEBUG("loading %ldMB from file \"%s\"", (size) YAMI_B_TO_MB(file_size), yami_file);
 
     int fd = fileno(f);
     void *data = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);

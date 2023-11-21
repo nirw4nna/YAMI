@@ -42,6 +42,7 @@ YAMI_MAX_LABEL = 64
 # };
 class yami_context_init_params(Structure):
     _fields_ = [
+        ('n_workers', c_int),
         ('mem_size', c_int64),
         ('scratch_mem_size', c_int64),
         ('mem_buffer', c_void_p),
@@ -58,13 +59,13 @@ class yami_context_init_params(Structure):
 # };
 class yami_tensor(Structure):
     _fields_ = [
-        ('n_dim', c_int),
         ('ne', c_int64),
         ('dimensions', c_int64 * YAMI_MAX_DIMS),
         ('extended_dim', c_int64 * YAMI_MAX_DIMS),
         ('stride', c_int64 * YAMI_MAX_DIMS),
         ('label', c_char * YAMI_MAX_LABEL),
         ('data', c_float_p),
+        ('n_dim', c_int),
     ]
 
 
@@ -109,11 +110,11 @@ _lib.yami_mem_usage.restype = None
 
 # Wrappers
 class YamiContext:
-    def __init__(self, size: int):
+    def __init__(self, size: int, n_workers: int = 1):
         if size <= 0:
             raise RuntimeError(f'Invalid context size {size}')
 
-        self._ctx_p = yami_init(yami_context_init_params(size, 0, None, None))
+        self._ctx_p = yami_init(yami_context_init_params(n_workers, size, 0, None, None))
         self._as_parameter_ = self._ctx_p
 
     def __del__(self):
@@ -234,6 +235,15 @@ _lib.yami_transpose.argtypes = [yami_context_p, yami_tensor_p, c_int, c_int]
 _lib.yami_transpose.restype = yami_tensor_p
 
 
+# extern yami_tensor *yami_contiguous(yami_context *ctx, yami_tensor *x) noexcept;
+def yami_contiguous(ctx: YamiContext, x: YamiTensor) -> YamiTensor:
+    return YamiTensor(_lib.yami_contiguous(ctx, x))
+
+
+_lib.yami_contiguous.argtypes = [yami_context_p, yami_tensor_p]
+_lib.yami_contiguous.restype = yami_tensor_p
+
+
 # extern yami_tensor *yami_lt_mask(yami_context *ctx,
 #                                  const yami_tensor *x,
 #                                  f32 mask) noexcept;
@@ -249,10 +259,10 @@ _lib.yami_lt_mask.restype = yami_tensor_p
 #                                 const yami_tensor *xa,
 #                                 const yami_tensor *xb) noexcept;
 def yami_matmul(ctx: YamiContext, xa: YamiTensor, xb: YamiTensor) -> YamiTensor:
-    return YamiTensor(_lib.yami_matmul(ctx, xa, xb))
+    return YamiTensor(_lib.yami_matmul(ctx, xa, xb, None))
 
 
-_lib.yami_matmul.argtypes = [yami_context_p, yami_tensor_p, yami_tensor_p]
+_lib.yami_matmul.argtypes = [yami_context_p, yami_tensor_p, yami_tensor_p, yami_tensor_p]
 _lib.yami_matmul.restype = yami_tensor_p
 
 

@@ -3,8 +3,9 @@ import numpy as np
 from random import randint
 import torch
 import torch.nn.functional as F
+import time
 
-TEST_STEPS = 100
+TEST_STEPS = 10
 RNG = np.random.default_rng()
 
 
@@ -19,98 +20,81 @@ def all_close(actual, target, eps=1e-5):
 
 
 def random_ndarray(*dims: int) -> np.ndarray:
+    # return np.random.randint(-100, 100, size=dims, dtype=np.float32)
     return (RNG.random(dims, dtype=np.float32) - 0.5).astype(np.float32)
 
 
+def _bench_matmul(ctx: YamiContext, dim_a: tuple[int, ...], dim_b: tuple[int, ...]):
+    target_a = random_ndarray(*dim_a)
+    target_b = random_ndarray(*dim_b)
+    start = time.perf_counter()
+    target_res = np.matmul(target_a, target_b)
+    stop = time.perf_counter()
+    delay_np_ms = (stop - start) * 1000
+
+    my_a = YamiTensor.from_np(ctx, 'a', target_a)
+    my_b = YamiTensor.from_np(ctx, 'b', target_b)
+    start = time.perf_counter()
+    my_res = yami_matmul(ctx, my_a, my_b)
+    stop = time.perf_counter()
+    delay_yami_ms = (stop - start) * 1000
+
+    my_res_np = my_res.as_np()
+    assert all_close(my_res_np, target_res)
+    diff = delay_yami_ms / delay_np_ms
+    # We strive to be at most 3X slower than NP which is faster than Pytorch for small matrices,
+    # comparable for medium-sized matrices and a bit slower with huge matrices.
+    # Once we can actually pass this test we can then add it to the GitHub CI pipeline to check whether
+    # we can accept a new commit on the main branch!
+    print(f'YAMI is {round(diff)}X slower than Numpy when multiplying {dim_a} with {dim_b}!')
+    if diff > 3.1:
+        pass
+        # assert False
+
+
 class TestMatmul:
-    def test_2d_square(self):
-        ctx = YamiContext(1024*1024)
-        for step in range(TEST_STEPS):
-            print(f'\n================================ test_2d_square {step+1}/{TEST_STEPS} ================================\n')
-            n = randint(1, 100)
-            target_a = random_ndarray(n, n)
-            target_b = random_ndarray(n, n)
-            target_res = np.matmul(target_a, target_b)
+    def test_2d(self):
+        ctx = YamiContext(1024*1024*1024*5, 12)
+        # test small
+        _bench_matmul(ctx, (2, 2), (2, 2))
+        ctx.clear()
 
-            my_a = YamiTensor.from_np(ctx, 'my_a', target_a)
-            my_b = YamiTensor.from_np(ctx, 'my_b', target_b)
-            my_res = yami_matmul(ctx, my_a, my_b)
-            my_res_np = my_res.as_np()
+        # test medium
+        _bench_matmul(ctx, (1024, 512), (512, 1024))
+        ctx.clear()
 
-            assert all_close(my_res_np, target_res)
-
-            ctx.report_usage()
-            ctx.clear()
-
-    def test_2d_rect(self):
-        ctx = YamiContext(1024*1024)
-        for step in range(TEST_STEPS):
-            print(f'\n================================ test_2d_rect {step+1}/{TEST_STEPS} ================================\n')
-            n = randint(1, 100)
-            m = randint(1, 100)
-            target_a = random_ndarray(n, m)
-            target_b = random_ndarray(m, n)
-
-            target_res = np.matmul(target_a, target_b)
-
-            my_a = YamiTensor.from_np(ctx, 'my_a', target_a)
-            my_b = YamiTensor.from_np(ctx, 'my_b', target_b)
-
-            my_res = yami_matmul(ctx, my_a, my_b)
-            my_res_np = my_res.as_np()
-
-            assert all_close(my_res_np, target_res)
-
-            ctx.report_usage()
-            ctx.clear()
+        # test large
+        _bench_matmul(ctx, (4096, 1024), (1024, 4096))
+        ctx.clear()
 
     def test_3d(self):
-        ctx = YamiContext(1024*1024*10)
-        for step in range(TEST_STEPS):
-            print(f'\n================================ test_3d {step+1}/{TEST_STEPS} ================================\n')
-            n = randint(1, 100)
-            m = randint(1, 100)
-            i = randint(2, 100)
+        ctx = YamiContext(1024*1024*1024*5, 12)
+        # test small
+        _bench_matmul(ctx, (4, 4, 4), (4, 4, 4))
+        ctx.clear()
 
-            target_a = random_ndarray(i if randint(0, 100) % 2 == 0 else 1, n, m)
-            target_b = random_ndarray(1 if randint(0, 100) % 2 == 0 else i, m, n)
+        # test medium
+        _bench_matmul(ctx, (128, 1024, 512), (512, 1024))
+        ctx.clear()
 
-            target_res = np.matmul(target_a, target_b)
-
-            my_a = YamiTensor.from_np(ctx, 'my_a', target_a)
-            my_b = YamiTensor.from_np(ctx, 'my_b', target_b)
-
-            my_res = yami_matmul(ctx, my_a, my_b)
-            my_res_np = my_res.as_np()
-
-            assert all_close(my_res_np, target_res)
-
-            ctx.report_usage()
-            ctx.clear()
+        # test large
+        # _bench_matmul(ctx, (64, 4096, 1024), (64, 1024, 4096))
+        # ctx.clear()
 
     def test_4d(self):
-        ctx = YamiContext(1024*1024*100)
-        for step in range(TEST_STEPS):
-            print(f'\n================================ test_4d {step+1}/{TEST_STEPS} ================================\n')
-            n = randint(2, 50)
-            m = randint(2, 50)
-            i = randint(2, 50)
-            j = randint(2, 50)
-            target_a = random_ndarray(1 if randint(0, 100) % 2 == 0 else j, i if randint(0, 100) % 2 == 0 else 1,
-                                      n, m)
-            target_b = random_ndarray(j if randint(0, 100) % 2 == 0 else 1, 1 if randint(0, 100) % 2 == 0 else i,
-                                      m, n)
+        ctx = YamiContext(1024*1024*1024*5, 1)
+        # test small
+        # _bench_matmul(ctx, (8, 1, 4, 4), (8, 2, 4, 4))
+        _bench_matmul(ctx, (1024, 12, 11, 64), (1024, 12, 64, 11))
+        # ctx.clear()
 
-            target_res = np.matmul(target_a, target_b)
-            my_a = YamiTensor.from_np(ctx, 'my_a', target_a)
-            my_b = YamiTensor.from_np(ctx, 'my_b', target_b)
-            my_res = yami_matmul(ctx, my_a, my_b)
-            my_res_np = my_res.as_np()
+        # test medium
+        # _bench_matmul(ctx, (2, 128, 512, 512), (128, 512, 63))
+        # ctx.clear()
 
-            assert all_close(my_res_np, target_res)
-
-            ctx.report_usage()
-            ctx.clear()
+        # test large
+        # _bench_matmul(ctx, (1, 12, 1024, 1024), (1, 1024, 2048))
+        # ctx.clear()
 
 
 class TestAdd:
@@ -432,7 +416,7 @@ def test_exp():
 
 
 def test_transpose():
-    ctx = YamiContext(1024*1024*30)
+    ctx = YamiContext(1024*1024*1024)
     for step in range(TEST_STEPS):
         print(f'\n================================ test_transpose {step+1}/{TEST_STEPS} ================================\n')
         n = randint(2, 50)

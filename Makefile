@@ -1,8 +1,9 @@
-#TEST_TARGETS = tests/test_matmul
+TEST_TARGETS = test/test_matmul
 
 CXX			=	g++
 CXXFLAGS	=	-std=c++17 -Wall -Wextra -Wformat -Wnoexcept -Wcast-qual -fno-exceptions \
-				-fno-rtti -Wunused -Wdouble-promotion -Wpadded -Wlogical-op -Wcast-align
+				-fno-rtti -Wunused -Wdouble-promotion -Wlogical-op -Wcast-align -pthread
+LDFLAGS		=	-lm
 
 UNAME_M	=	$(shell uname -m)
 
@@ -12,7 +13,7 @@ ifeq ($(UNAME_M),$(filter $(UNAME_M),x86_64))
 endif
 
 ifdef YAMI_FAST
-	CXXFLAGS	+= -Ofast -flto -DYAMI_FAST
+	CXXFLAGS	+= -Ofast -flto=auto -fuse-linker-plugin -DYAMI_FAST
 else
 	CXXFLAGS	+= -O0 -g -DYAMI_DEBUG
 endif
@@ -28,11 +29,14 @@ all: clean pyyami gpt2
 
 .PHONY: clean pyyami gpt2
 
+clean:
+	rm -rf *.o *.so $(TEST_TARGETS) mlp gpt2 main
+
 pyyami: yami2.cpp
 	$(CXX) $(CXXFLAGS) -fPIC -shared $< -o yami2.so
 
-#test: $(TEST_TARGETS)
-#	@fail=0; \
+test: $(TEST_TARGETS)
+	@#fail=0; \
 #	total_tests=0; \
 #	for t in $(TEST_TARGETS); do \
 #  	  echo "======================================"; \
@@ -52,24 +56,14 @@ pyyami: yami2.cpp
 #	  echo "All tests passed!"; \
 #	fi;
 
-clean:
-	rm -rf *.o *.so $(TEST_TARGETS) mlp gpt2 main
-
-#yami.o: yami.cpp yami.h
-#	$(CXX) $(CXXFLAGS) -c $< -o $@
-
 yami2.o: yami2.cpp yami2.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 yami_utils.o: yami_utils.cpp yami_utils.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-#main: main.cpp yami2.o yami_tokenizers.o
-#	$(CXX) $(CXXFLAGS) $< -o $@ yami2.o yami_tokenizers.o
-
-#mlp: mlp.cpp yami.o
-#	$(CXX) $(CXXFLAGS) $< -o $@ yami.o $(LDFLAGS)
-#
-
 gpt2: gpt2.cpp yami2.o yami_utils.o
 	$(CXX) $(CXXFLAGS) $< -o $@ yami2.o yami_utils.o $(LDFLAGS)
+
+test/test_matmul: test/test_matmul.cpp yami2.o
+	$(CXX) $(CXXFLAGS) $< -o $@ yami2.o $(LDFLAGS)

@@ -16,3 +16,6 @@ test_*
 !test_*.cpp
 !test_*.py
 .pytest_cache
+
+# perf stats
+*.data*

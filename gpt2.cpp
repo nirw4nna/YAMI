@@ -100,11 +100,13 @@ static std::vector<int> generate(gpt2_model& model, std::vector<int>&& tok) {
     yami_context *scratch_ctx = yami_ctx_scratch(model.ctx);
 
     std::vector<int> pos;
+    f64 start_t;
     for (int i = 0; i < max_tokens; ++i) {
         yami_clear_ctx(scratch_ctx);
 
         YAMI_ASSERT(generated.size() < model.hparams.block_size);
 
+        start_t = yami_timer();
         pos.resize(generated.size());
         for (int j = 0; j < (int) generated.size(); ++j) {
             pos[j] = j;
@@ -143,11 +145,16 @@ static std::vector<int> generate(gpt2_model& model, std::vector<int>&& tok) {
             memcpy(v->data, &cur->data[2*ne],ne * sizeof(f32));
 
 
-            yami_tensor *q_t = yami_transpose(scratch_ctx, q, 1, 2);
-            yami_tensor *k_t = yami_transpose(scratch_ctx,
-                                              yami_transpose(scratch_ctx, k, 1, 2),
-                                              -2, -1);
-            yami_tensor *v_t = yami_transpose(scratch_ctx, v, 1, 2);
+            yami_tensor *q_t = yami_contiguous(scratch_ctx,
+                                               yami_transpose(scratch_ctx, q, 1, 2)
+            );
+            yami_tensor *k_t = yami_contiguous(scratch_ctx,yami_transpose(scratch_ctx,
+                                                                          yami_transpose(scratch_ctx, k, 1, 2),
+                                                                          -2, -1)
+            );
+            yami_tensor *v_t = yami_contiguous(scratch_ctx,
+                                               yami_transpose(scratch_ctx, v, 1, 2)
+            );
 
             cur = yami_matmul(scratch_ctx, q_t, k_t);
             yami_mulc(scratch_ctx, cur, att_scale);
@@ -156,7 +163,9 @@ static std::vector<int> generate(gpt2_model& model, std::vector<int>&& tok) {
             yami_softmax(scratch_ctx, cur, -1);
 
             yami_tensor *out = yami_matmul(scratch_ctx, cur, v_t);
-            out = yami_transpose(scratch_ctx, out, 1, 2);
+            out = yami_contiguous(scratch_ctx,
+                                  yami_transpose(scratch_ctx, out, 1, 2)
+            );
             yami_reshape(out, 3, model.hparams.block_size, generated.size(), model.hparams.emb_size);
 
             yami_tensor *out_proj = yami_add(
@@ -201,6 +210,8 @@ static std::vector<int> generate(gpt2_model& model, std::vector<int>&& tok) {
         std::discrete_distribution<> dist(model.probs.begin(), model.probs.end());
         generated.push_back(dist(model.rng));
 
+        YAMI_LOG_INFO("1 tok in %f s", yami_timer() - start_t);
+
         yami_mem_usage(scratch_ctx);
     }
 
@@ -209,6 +220,7 @@ static std::vector<int> generate(gpt2_model& model, std::vector<int>&& tok) {
 
 int main() {
     yami_context *ctx = yami_init(yami_context_init_params{
+            1,
             1024 * 1024 * 650L,
             1024 * 1024 * 1024 * 5L,
             nullptr,

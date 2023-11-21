@@ -19,7 +19,7 @@
     } while(0)
 
 #ifdef YAMI_DEBUG
-#   define YAMI_LOG_DEBUG(format, ...) YAMI_LOG_INFO(format, ##__VA_ARGS__)
+#   define YAMI_LOG_DEBUG(format, ...)  YAMI_LOG_INFO(format, ##__VA_ARGS__)
 #else
 #   define YAMI_LOG_DEBUG(format, ...)  ((void) 0)
 #endif
@@ -55,6 +55,7 @@ extern "C" {
     struct yami_obj;
 
     struct yami_context_init_params {
+        int n_workers;
         size mem_size;
         size scratch_mem_size;
         void *mem_buffer;
@@ -75,19 +76,12 @@ extern "C" {
         char label[yami_max_label];
         f32 *data;
         int n_dim;
-        u8 pad[4];
     };
 
-    static inline i64 yami_time_us() noexcept {
+    static inline f64 yami_timer() noexcept {
         timespec ts{};
         clock_gettime(CLOCK_MONOTONIC, &ts);
-        return (i64) (ts.tv_sec * 1'000'000ULL) + (i64) (ts.tv_nsec / 1'000ULL);
-    }
-
-    static inline i64 yami_time_ms() noexcept {
-        timespec ts{};
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        return (i64) (ts.tv_sec * 1'000ULL) + (i64) (ts.tv_nsec / 1'000'000ULL);
+        return (f64) ts.tv_sec + (f64) ts.tv_nsec * 1.e-9;
     }
 
     // ============================ Initialization ============================
@@ -133,6 +127,7 @@ extern "C" {
                                        yami_tensor *x,
                                        int dim1 = -1,
                                        int dim2 = -2) noexcept;
+    extern yami_tensor *yami_contiguous(yami_context *ctx, yami_tensor *x) noexcept;
     // Returns a tensors which is the lower triangular part of x with the other elements
     // set to mask. x must be at least a 2D tensor.
     extern yami_tensor *yami_lt_mask(yami_context *ctx,
@@ -162,8 +157,8 @@ extern "C" {
                                  const yami_tensor *xb,
                                  bool in_place = false) noexcept;
     extern yami_tensor *yami_subc(yami_context *ctx,
-                                 yami_tensor *x, f32 c,
-                                 bool in_place = true) noexcept;
+                                  yami_tensor *x, f32 c,
+                                  bool in_place = true) noexcept;
     extern yami_tensor *yami_mul(yami_context *ctx,
                                  yami_tensor *xa,
                                  const yami_tensor *xb,
@@ -200,8 +195,8 @@ extern "C" {
                                  yami_tensor *x,
                                  bool in_place = true) noexcept;
     extern yami_tensor *yami_sqrt(yami_context *ctx,
-                                 yami_tensor *x,
-                                 bool in_place = true) noexcept;
+                                  yami_tensor *x,
+                                  bool in_place = true) noexcept;
     extern yami_tensor *yami_max(yami_context *ctx,
                                  const yami_tensor *x,
                                  int dim) noexcept;
