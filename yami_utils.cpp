@@ -6,6 +6,9 @@
 #include <cstring>
 #include <limits>
 
+#define YAMI_MAGIC ((u32) 0x001FAA1A)
+
+
 static inline void bytes_from_unicode(const int unicode, int *n, u8 *buff) noexcept {
     if (unicode >= 0 && unicode <= 0x7F) {
         buff[0] = (u8) unicode;
@@ -201,13 +204,10 @@ std::vector<int> yami_bpe_tokenizer::encode(const std::string& text) noexcept {
             } else if (is_whitespace(c_unicode)) {
                 split = true;
             }
-        }else if (next_is_letter && !is_letter(c_unicode)) {
-            split = true;
-        } else if (next_is_digit && !is_digit(c_unicode)) {
-            split = true;
-        } else if (next_is_other && (is_digit(c_unicode) || is_letter(c_unicode) || is_whitespace(c_unicode))) {
-            split = true;
-        } else if (next_is_space && (is_digit(c_1_unicode) || is_letter(c_1_unicode))) {
+        } else if ((next_is_letter && !is_letter(c_unicode)) ||
+                   (next_is_digit && !is_digit(c_unicode)) ||
+                   (next_is_other && (is_digit(c_unicode) || is_letter(c_unicode) || is_whitespace(c_unicode))) ||
+                   (next_is_space && (is_digit(c_1_unicode) || is_letter(c_1_unicode)))) {
             split = true;
         }
 
@@ -305,18 +305,16 @@ std::vector<int> yami_bpe_tokenizer::encode(const std::string& text) noexcept {
     return bpe_idx;
 }
 
-std::string yami_bpe_tokenizer::decode(const std::vector<int>& bpe_idx) noexcept {
+
+std::string yami_bpe_tokenizer::decode(const int bpe_idx) noexcept {
     std::string decoded;
 
     std::string merged;
-    for (const auto &idx : bpe_idx) {
-        merged.clear();
-        merged += bpe_decoder_[idx];
-        for (usize i = 0; i < merged.size();) {
-            const int unicode = from_utf8(merged, &i);
-            const std::string &as_str = to_utf8(unicode);
-            decoded += (byte) byte_decoder_[as_str];
-        }
+    merged += bpe_decoder_[bpe_idx];
+    for (usize i = 0; i < merged.size();) {
+        const int unicode = from_utf8(merged, &i);
+        const std::string &as_str = to_utf8(unicode);
+        decoded += (byte) byte_decoder_[as_str];
     }
 
     return decoded;
@@ -326,14 +324,11 @@ void yami_load_model(yami_context *ctx, yami_model *model, const char *yami_file
     FILE *f = fopen(yami_file, "rb");
     YAMI_ASSERT(f != nullptr);
 
-    // "YAMIF" in little endian
-    constexpr static u32 yami_magic = 0x001FAA1A;
-
     // check the header
     u32 head = 0;
     usize n;
     n = fread(&head, 1, 3, f);
-    if (n != 3 || yami_magic != head) {
+    if (n != 3 || YAMI_MAGIC != head) {
         YAMI_LOG_ERR("wrong header %08X", head);
         fclose(f);
         exit(EXIT_FAILURE);
@@ -408,8 +403,8 @@ void yami_load_model(yami_context *ctx, yami_model *model, const char *yami_file
         ptr += label_size + 1;
         const int n_dim = (int) (ptr[0]);
         ptr++;
-        const size *dim = (const size *) ptr;
-        ptr += yami_max_dims * sizeof(size);
+        const usize *dim = (const usize *) ptr;
+        ptr += YAMI_MAX_DIMS * sizeof(usize);
         const u64 data_size = (u64) ((*(const u64 *) ptr) * sizeof(f32));
         ptr += 8;
 
@@ -421,4 +416,100 @@ void yami_load_model(yami_context *ctx, yami_model *model, const char *yami_file
     model->tensors = std::move(tensors);
 
     munmap(data, file_size);
+}
+
+static usize parse_mem_arg(const char *const mem_str) noexcept {
+    char *multiplier;
+    usize mem = (usize) ::strtol(mem_str, &multiplier, 10);
+    if (errno == ERANGE || errno == EINVAL) {
+        fprintf(stderr, "\"%s\" is not a valid memory size.\n", mem_str);
+        exit(EXIT_FAILURE);
+    }
+    switch (multiplier[0]) {
+        case 0:
+            break;
+        case 'K':
+            mem *= 1024L;
+            break;
+        case 'M':
+            mem *= 1024 * 1024L;
+            break;
+        case 'G':
+            mem *= 1024 * 1024 * 1024L;
+            break;
+        default:
+            fprintf(stderr, "Unknown multiplier \"%c\".\n", multiplier[0]);
+            exit(EXIT_FAILURE);
+    }
+
+    return mem;
+}
+
+void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexcept {
+    settings->n_workers = 1;
+    settings->temperature = 1.f;
+    settings->yami_file = "gpt2.ymf";
+    settings->main_ctx_size = 1024*1024*1024L;
+    settings->scratch_ctx_size = 1024*1024*1024L;
+    settings->seed = time(nullptr);
+
+    for (int i = 1; i < argc; ++i) {
+        if ((i+1) < argc) {
+            if (strcmp("-i", argv[i]) == 0 || strcmp("--input", argv[i]) == 0) {
+                settings->prompt = argv[++i];
+            } else if (strcmp("-w", argv[i]) == 0 || strcmp("--workers", argv[i]) == 0) {
+                const int n_workers = (int) ::strtol(argv[++i], nullptr, 10);
+                if (errno == ERANGE || errno == EINVAL) {
+                    fprintf(stderr, "\"%s\" is not a valid number of workers.\n", argv[i]);
+                    exit(EXIT_FAILURE);
+                }
+                settings->n_workers = n_workers;
+            } else if (strcmp("-t", argv[i]) == 0 || strcmp("--temp", argv[i]) == 0) {
+                const f32 temp = ::strtof(argv[++i], nullptr);
+                if (errno == ERANGE) {
+                    fprintf(stderr, "\"%s\" is not a valid temperature.\n", argv[i]);
+                    exit(EXIT_FAILURE);
+                }
+                settings->temperature = temp;
+            } else if (strcmp("-m", argv[i]) == 0 || strcmp("--model", argv[i]) == 0) {
+                settings->yami_file = argv[++i];
+            } else if (strcmp("-s", argv[i]) == 0 || strcmp("--seed", argv[i]) == 0) {
+                const usize seed = (usize) ::strtol(argv[++i], nullptr, 10);
+                if (errno == ERANGE || errno == EINVAL) {
+                    fprintf(stderr, "\"%s\" is not a valid seed.\n", argv[i]);
+                    exit(EXIT_FAILURE);
+                }
+                settings->seed = seed;
+            } else if (strcmp("-n", argv[i]) == 0 || strcmp("--new-tokens", argv[i]) == 0) {
+                const int n = (int) ::strtol(argv[++i], nullptr, 10);
+                if (errno == ERANGE || errno == EINVAL) {
+                    fprintf(stderr, "\"%s\" is not a valid number of tokens.\n", argv[i]);
+                    exit(EXIT_FAILURE);
+                }
+                settings->n_tokens = n;
+            } else if (strcmp("-M", argv[i]) == 0 || strcmp("--main-mem", argv[i]) == 0) {
+                settings->main_ctx_size = parse_mem_arg(argv[++i]);
+            } else if (strcmp("-S", argv[i]) == 0 || strcmp("--scratch-mem", argv[i]) == 0) {
+                settings->scratch_ctx_size = parse_mem_arg(argv[++i]);
+            }
+        } else if (strcmp("--help", argv[i]) == 0) {
+            printf("Usage: %s [options]\nOptions:\n", argv[0]);
+            printf("  --help\t\tDisplay this message.\n");
+            printf("  -i, --input\t\tInput prompt.\n");
+            printf("  -n, --new-tokens\t\tNumber of new tokens to generate.\n");
+            printf("  -w, --workers\t\tNumber of workers to use (default=1).\n");
+            printf("  -t, --temp\t\tModel temperature (default=1.0).\n");
+            printf("  -m, --model\t\tPath to the model file (default=gpt2.ymf).\n");
+            printf("  -s, --seed\t\tSeed to use for generation (default=time).\n");
+            printf("  -M, --main-mem\tMemory to allocate for the main context, must be enough to store the model weights (default=1G).\n");
+            printf("  -S, --scratch-mem\tMemory to allocate for the scratch context used to store intermediate results (default=1G).\n");
+
+            exit(EXIT_SUCCESS);
+        }
+    }
+
+    if (settings->prompt.empty()) {
+        fprintf(stderr, "Missing input prompt.\n");
+        exit(EXIT_FAILURE);
+    }
 }

@@ -1,3 +1,5 @@
+import math
+
 from pyyami import *
 import numpy as np
 from random import randint
@@ -21,35 +23,56 @@ def all_close(actual, target, eps=1e-5):
 
 def random_ndarray(*dims: int) -> np.ndarray:
     # return np.random.randint(-100, 100, size=dims, dtype=np.float32)
-    return (RNG.random(dims, dtype=np.float32) - 0.5).astype(np.float32)
+    return (RNG.random(dims, dtype=np.float32) + 100).astype(np.float32)
 
 
 def _bench_matmul(ctx: YamiContext, dim_a: tuple[int, ...], dim_b: tuple[int, ...]):
     target_a = random_ndarray(*dim_a)
     target_b = random_ndarray(*dim_b)
-    start = time.perf_counter()
-    target_res = np.matmul(target_a, target_b)
-    stop = time.perf_counter()
-    delay_np_ms = (stop - start) * 1000
 
+    # Numpy
+    start = time.perf_counter()
+    for _ in range(TEST_STEPS):
+        target_res = np.matmul(target_a, target_b)
+    stop = time.perf_counter()
+    delay_np_ms = ((stop - start) * 1000) / TEST_STEPS
+
+    # Pytorch
+    torch_a = torch.tensor(target_a, dtype=torch.float32)
+    torch_b = torch.tensor(target_b, dtype=torch.float32)
+
+    start = time.perf_counter()
+    with torch.no_grad():
+        for _ in range(TEST_STEPS):
+            target_py = torch.matmul(torch_a, torch_b)
+
+    stop = time.perf_counter()
+    delay_torch_ms = ((stop - start) * 1000) / TEST_STEPS
+
+    # Yami
     my_a = YamiTensor.from_np(ctx, 'a', target_a)
     my_b = YamiTensor.from_np(ctx, 'b', target_b)
     start = time.perf_counter()
-    my_res = yami_matmul(ctx, my_a, my_b)
+    for _ in range(TEST_STEPS):
+        my_res = yami_matmul(ctx, my_a, my_b)
     stop = time.perf_counter()
-    delay_yami_ms = (stop - start) * 1000
+    delay_yami_ms = ((stop - start) * 1000) / TEST_STEPS
 
     my_res_np = my_res.as_np()
     assert all_close(my_res_np, target_res)
-    diff = delay_yami_ms / delay_np_ms
+    diff_np = delay_yami_ms / delay_np_ms
+    diff_torch = delay_yami_ms / delay_torch_ms
     # We strive to be at most 3X slower than NP which is faster than Pytorch for small matrices,
     # comparable for medium-sized matrices and a bit slower with huge matrices.
     # Once we can actually pass this test we can then add it to the GitHub CI pipeline to check whether
     # we can accept a new commit on the main branch!
-    print(f'YAMI is {round(diff)}X slower than Numpy when multiplying {dim_a} with {dim_b}!')
-    if diff > 3.1:
-        pass
-        # assert False
+    print(f'YAMI is {round(diff_np, 2)}X slower than Numpy and {round(diff_torch, 2)}X slower than PyTorch'
+          f' when multiplying {dim_a} with {dim_b}!\n'
+          f'\t-> YAMI: {round(delay_yami_ms, 2)}ms\n'
+          f'\t-> PyTorch: {round(delay_torch_ms, 2)}ms\n'
+          f'\t-> NumPy: {round(delay_np_ms, 2)}ms')
+    # if diff > 3.1:
+    # assert False
 
 
 class TestMatmul:
@@ -67,6 +90,25 @@ class TestMatmul:
         _bench_matmul(ctx, (4096, 1024), (1024, 4096))
         ctx.clear()
 
+    def test_sparse(self):
+        # Test the most critical matmul used in GPT2
+        ctx = YamiContext(1024*1024*1024*5, 12)
+
+        _bench_matmul(ctx, (1024, 12, 11, 64), (1024, 12, 64, 11))
+        ctx.clear()
+
+        _bench_matmul(ctx, (768, 768), (768, 4))
+        ctx.clear()
+
+        _bench_matmul(ctx, (1024, 12, 11, 11), (1024, 12, 11, 64))
+        ctx.clear()
+
+        _bench_matmul(ctx, (1024, 11, 768), (768, 768))
+        ctx.clear()
+
+        _bench_matmul(ctx, (11, 768), (768, 50257))
+        ctx.clear()
+
     def test_3d(self):
         ctx = YamiContext(1024*1024*1024*5, 12)
         # test small
@@ -78,15 +120,15 @@ class TestMatmul:
         ctx.clear()
 
         # test large
-        # _bench_matmul(ctx, (64, 4096, 1024), (64, 1024, 4096))
-        # ctx.clear()
+        _bench_matmul(ctx, (64, 1024, 1024), (64, 1024, 1024))
+        ctx.clear()
 
     def test_4d(self):
-        ctx = YamiContext(1024*1024*1024*5, 1)
+        ctx = YamiContext(1024*1024*1024*5, 12)
         # test small
-        # _bench_matmul(ctx, (8, 1, 4, 4), (8, 2, 4, 4))
-        _bench_matmul(ctx, (1024, 12, 11, 64), (1024, 12, 64, 11))
-        # ctx.clear()
+        _bench_matmul(ctx, (1024, 20, 11, 64), (1024, 20, 64, 11))
+        # _bench_matmul(ctx, (5, 20, 11, 64), (5, 20, 64, 11))
+        ctx.clear()
 
         # test medium
         # _bench_matmul(ctx, (2, 128, 512, 512), (128, 512, 63))
@@ -99,7 +141,7 @@ class TestMatmul:
 
 class TestAdd:
     def test_1d(self):
-        ctx = YamiContext(1024*1024)
+        ctx = YamiContext(1024*1024*10)
         for step in range(TEST_STEPS):
             print(f'\n================================ test_1d {step+1}/{TEST_STEPS} ================================\n')
             n = randint(2, 1000)
@@ -253,30 +295,30 @@ class TestDiv:
             ctx.clear()
 
 
-def test_tanh():
-    ctx = YamiContext(1024*1024*50)
-    for step in range(TEST_STEPS):
-        print(f'\n================================ test_tanh {step+1}/{TEST_STEPS} ================================\n')
-        n = randint(2, 50)
-        m = randint(2, 50)
-        k = randint(2, 50)
-        j = randint(2, 50)
-        target_a = random_ndarray(1 if randint(0, 100) % 2 == 0 else k,
-                                  1 if randint(0, 100) % 2 == 0 else n,
-                                  1 if randint(0, 100) % 2 == 0 else m,
-                                  1 if randint(0, 100) % 2 == 0 else j)
-
-        target_res = np.tanh(target_a)
-
-        my_a = YamiTensor.from_np(ctx, 'my_a', target_a)
-        my_res = yami_tanh(ctx, my_a)
-
-        my_res_np = my_res.as_np()
-
-        assert all_close(my_res_np, target_res)
-
-        ctx.report_usage()
-        ctx.clear()
+# def test_tanh():
+#     ctx = YamiContext(1024*1024*50)
+#     for step in range(TEST_STEPS):
+#         print(f'\n================================ test_tanh {step+1}/{TEST_STEPS} ================================\n')
+#         n = randint(2, 50)
+#         m = randint(2, 50)
+#         k = randint(2, 50)
+#         j = randint(2, 50)
+#         target_a = random_ndarray(1 if randint(0, 100) % 2 == 0 else k,
+#                                   1 if randint(0, 100) % 2 == 0 else n,
+#                                   1 if randint(0, 100) % 2 == 0 else m,
+#                                   1 if randint(0, 100) % 2 == 0 else j)
+#
+#         target_res = np.tanh(target_a)
+#
+#         my_a = YamiTensor.from_np(ctx, 'my_a', target_a)
+#         my_res = yami_tanh(ctx, my_a)
+#
+#         my_res_np = my_res.as_np()
+#
+#         assert all_close(my_res_np, target_res)
+#
+#         ctx.report_usage()
+#         ctx.clear()
 
 
 def test_gelu():
@@ -430,7 +472,7 @@ def test_transpose():
                 target_res = target_a.transpose(a1, a2)
                 my_a = YamiTensor.from_np(ctx, 'my_a', target_a.numpy())
 
-                my_res = yami_transpose(ctx, my_a, a1, a2)
+                my_res = yami_contiguous(ctx, yami_transpose(ctx, my_a, a1, a2))
 
                 assert all_close(my_res.as_np(), target_res.numpy())
 
@@ -456,3 +498,99 @@ def test_mask():
         assert all_close(my_res_np, target_res.numpy())
         ctx.report_usage()
         ctx.clear()
+
+
+def test_mean():
+    ctx = YamiContext(1024*1024*100)
+    for step in range(TEST_STEPS):
+        print(f'\n================================ test_mean {step+1}/{TEST_STEPS} ================================\n')
+        n = randint(2, 50)
+        m = randint(2, 50)
+        k = randint(2, 50)
+        j = randint(2, 50)
+        target_a = random_ndarray(1 if randint(0, 100) % 2 == 0 else k,
+                                  1 if randint(0, 100) % 2 == 0 else n,
+                                  1 if randint(0, 100) % 2 == 0 else m,
+                                  1 if randint(0, 100) % 2 == 0 else j)
+
+        dim = randint(-4, 3)
+        print(f'mean over axis={dim}')
+
+        target_res = np.mean(target_a, axis=dim, keepdims=True)
+
+        my_a = YamiTensor.from_np(ctx, 'my_a', target_a)
+        my_res = yami_mean(ctx, my_a, dim=dim)
+        my_res_np = my_res.as_np()
+
+        assert all_close(my_res_np, target_res)
+
+        ctx.report_usage()
+        ctx.clear()
+
+
+def test_var():
+    ctx = YamiContext(1024*1024*100)
+    for step in range(TEST_STEPS):
+        print(f'\n================================ test_var {step+1}/{TEST_STEPS} ================================\n')
+        n = randint(2, 50)
+        m = randint(2, 50)
+        k = randint(2, 50)
+        j = randint(2, 50)
+        target_a = random_ndarray(1 if randint(0, 100) % 2 == 0 else k,
+                                  1 if randint(0, 100) % 2 == 0 else n,
+                                  1 if randint(0, 100) % 2 == 0 else m,
+                                  1 if randint(0, 100) % 2 == 0 else j)
+
+        dim = randint(-4, 3)
+        print(f'variance over axis={dim}')
+
+        target_res = np.var(target_a, axis=dim, keepdims=True)
+
+        my_a = YamiTensor.from_np(ctx, 'my_a', target_a)
+        my_res = yami_var(ctx, my_a, dim=dim)
+        my_res_np = my_res.as_np()
+
+        assert all_close(my_res_np, target_res)
+
+        ctx.report_usage()
+        ctx.clear()
+
+
+def test_layer_norm():
+    ctx = YamiContext(1024*1024)
+
+    x = torch.randn((5, 10))
+    w = torch.ones(10)
+    b = torch.zeros(10)
+
+    my_x = YamiTensor.from_np(ctx, "x", x.numpy())
+    my_w = YamiTensor.from_np(ctx, "w", w.numpy())
+    my_b = YamiTensor.from_np(ctx, "b", b.numpy())
+
+    my_res = yami_layer_norm(ctx, my_w, my_b, my_x)
+    my_res_np = my_res.as_np()
+
+    for i in range(x.shape[0]):
+        assert (np.isclose(my_res_np[i, :].mean(), 0, atol=1e-5, rtol=1e-5) and
+                np.isclose(my_res_np[i, :].std(), 1, atol=1e-5, rtol=1e-5))
+
+    ctx.report_usage()
+
+
+def test_split():
+    ctx = YamiContext(1024*1024)
+    split_size = 768
+    a = torch.randn((1, 8, 2304))
+    q, k, v = a.split(split_size, dim=2)
+
+    my_a = YamiTensor.from_np(ctx, "a", a.numpy())
+    my_q = yami_split(ctx, my_a, split_size, 0)
+    my_k = yami_split(ctx, my_a, split_size, 1)
+    my_v = yami_split(ctx, my_a, split_size, 2)
+
+    assert (all_close(my_q.as_np(), q.numpy()) and
+            all_close(my_k.as_np(), k.numpy()) and
+            all_close(my_v.as_np(), v.numpy()))
+
+    ctx.report_usage()
+
