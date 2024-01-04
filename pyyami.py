@@ -214,11 +214,11 @@ _lib.yami_contiguous.argtypes = [yami_context_p, yami_tensor_p]
 _lib.yami_contiguous.restype = yami_tensor_p
 
 
-def yami_lt_mask(ctx: YamiContext, x: YamiTensor, mask: float = float('-inf')) -> YamiTensor:
-    return YamiTensor(_lib.yami_lt_mask(ctx, x, mask))
+def yami_lt_mask(ctx: YamiContext, x: YamiTensor, mask: float = float('-inf'), start: int = 0) -> YamiTensor:
+    return YamiTensor(_lib.yami_lt_mask(ctx, x, mask, start))
 
 
-_lib.yami_lt_mask.argtypes = [yami_context_p, yami_tensor_p, c_float]
+_lib.yami_lt_mask.argtypes = [yami_context_p, yami_tensor_p, c_float, c_size_t]
 _lib.yami_lt_mask.restype = yami_tensor_p
 
 
@@ -228,6 +228,14 @@ def yami_split(ctx: YamiContext, x: YamiTensor, n: int, offset: int, dim: int = 
 
 _lib.yami_split.argtypes = [yami_context_p, yami_tensor_p, c_size_t, c_int, c_int]
 _lib.yami_split.restype = yami_tensor_p
+
+
+def yami_concat(ctx: YamiContext, xa: YamiTensor, xb: YamiTensor, dim: int = 0) -> YamiTensor:
+    return YamiTensor(_lib.yami_concat(ctx, xa, xb, dim))
+
+
+_lib.yami_concat.argtypes = [yami_context_p, yami_tensor_p, yami_tensor_p, c_int]
+_lib.yami_concat.restype = yami_tensor_p
 
 
 def yami_matmul(ctx: YamiContext, xa: YamiTensor, xb: YamiTensor) -> YamiTensor:

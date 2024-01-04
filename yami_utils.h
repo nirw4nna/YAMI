@@ -17,6 +17,7 @@ struct yami_model_settings {
     usize main_ctx_size;
     usize scratch_ctx_size;
     usize seed;
+    usize top_k;
     int n_tokens;
     int n_workers;
     f32 temperature;
@@ -24,29 +25,36 @@ struct yami_model_settings {
     std::string yami_file;
 };
 
-struct yami_time_metrics {
+struct yami_perf_metrics {
     f64 encode;
     f64 generation;
     f64 sampling;
     f64 total;
-    int n_tokens;
+    int generated_tokens;
+    int prompt_tokens;
 
-    inline void report_timings() const noexcept {
-        YAMI_LOG_INFO("tokens\t\t= %d", n_tokens);
-        YAMI_LOG_INFO("encode time\t= %.2fms", encode * 1000.);
-        YAMI_LOG_INFO("generation time\t= %.2fms\t(%.2fms/tok,\t%.2f tokens/s)",
+    inline void report() const noexcept {
+        YAMI_LOG_INFO("prompt tokens\t\t= %d", prompt_tokens);
+        YAMI_LOG_INFO("generated tokens\t= %d", generated_tokens);
+        YAMI_LOG_INFO("encode time\t\t= %.2fms", encode * 1000.);
+        YAMI_LOG_INFO("generation time\t\t= %.2fms\t(%.2fms/tok,\t%.2f tokens/s)",
                       generation * 1000.,
-                      (generation * 1000.) / n_tokens,
-                      n_tokens / generation);
-        YAMI_LOG_INFO("sampling time\t= %.2fms\t(%.2fms/tok,\t%.2f tokens/s)",
+                      (generation * 1000.) / generated_tokens,
+                      generated_tokens / generation);
+        YAMI_LOG_INFO("sampling time\t\t= %.2fms\t(%.2fms/tok,\t%.2f tokens/s)",
                       sampling * 1000.,
-                      (sampling * 1000.) / n_tokens,
-                      n_tokens / sampling);
-        YAMI_LOG_INFO("total time\t= %.2fms\t(%.2fms/tok,\t%.2f tokens/s)",
+                      (sampling * 1000.) / generated_tokens,
+                      generated_tokens / sampling);
+        YAMI_LOG_INFO("total time\t\t= %.2fms\t(%.2fms/tok,\t%.2f tokens/s)",
                       total * 1000.,
-                      (total * 1000.) / n_tokens,
-                      n_tokens / total);
+                      (total * 1000.) / generated_tokens,
+                      generated_tokens / total);
     }
+};
+
+struct yami_token {
+    f32 value;
+    usize idx;
 };
 
 struct yami_bpe_tokenizer {
@@ -72,3 +80,7 @@ extern void yami_load_model(yami_context *ctx,
 
 extern void yami_arg_parse(int argc, char **argv,
                            yami_model_settings *settings) noexcept;
+
+extern std::vector<yami_token> yami_top_k(const f32 *values,
+                                          usize ne,
+                                          usize k = 1) noexcept;

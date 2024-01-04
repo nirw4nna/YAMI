@@ -452,6 +452,7 @@ void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexce
     settings->main_ctx_size = 1024*1024*1024L;
     settings->scratch_ctx_size = 1024*1024*1024L;
     settings->seed = time(nullptr);
+    settings->top_k = 0;
 
     for (int i = 1; i < argc; ++i) {
         if ((i+1) < argc) {
@@ -471,6 +472,13 @@ void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexce
                     exit(EXIT_FAILURE);
                 }
                 settings->temperature = temp;
+            } else if (strcmp("-k", argv[i]) == 0 || strcmp("--top-k", argv[i]) == 0) {
+                const int top_k = (usize) ::strtol(argv[++i], nullptr, 10);
+                if (errno == ERANGE || errno == EINVAL) {
+                    fprintf(stderr, "\"%s\" is not a valid value for K.\n", argv[i]);
+                    exit(EXIT_FAILURE);
+                }
+                settings->top_k = top_k;
             } else if (strcmp("-m", argv[i]) == 0 || strcmp("--model", argv[i]) == 0) {
                 settings->yami_file = argv[++i];
             } else if (strcmp("-s", argv[i]) == 0 || strcmp("--seed", argv[i]) == 0) {
@@ -496,9 +504,10 @@ void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexce
             printf("Usage: %s [options]\nOptions:\n", argv[0]);
             printf("  --help\t\tDisplay this message.\n");
             printf("  -i, --input\t\tInput prompt.\n");
-            printf("  -n, --new-tokens\t\tNumber of new tokens to generate.\n");
+            printf("  -n, --new-tokens\tNumber of new tokens to generate.\n");
             printf("  -w, --workers\t\tNumber of workers to use (default=1).\n");
             printf("  -t, --temp\t\tModel temperature (default=1.0).\n");
+            printf("  -k, --top-k\t\tTop k sampling (default=disabled).\n");
             printf("  -m, --model\t\tPath to the model file (default=gpt2.ymf).\n");
             printf("  -s, --seed\t\tSeed to use for generation (default=time).\n");
             printf("  -M, --main-mem\tMemory to allocate for the main context, must be enough to store the model weights (default=1G).\n");
@@ -512,4 +521,22 @@ void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexce
         fprintf(stderr, "Missing input prompt.\n");
         exit(EXIT_FAILURE);
     }
+}
+
+// Fixme: I don't really like the idea of allocating a dynamic array this big (50K elements),
+//  a possible solution could be to use alloca + qsort and then simply return the first K elements as a vector.
+std::vector<yami_token> yami_top_k(const f32 *values, const usize ne,
+                                   const usize k) noexcept {
+    std::vector<yami_token> res;
+    res.reserve(ne);
+
+    for (usize i = 0; i < ne; ++i)
+        res.emplace_back(yami_token{values[i], i});
+
+    std::sort(res.begin(), res.end(), [](const yami_token &xa, const yami_token &xb) {
+       return xa.value < xb.value;
+    });
+
+    res.resize(k);
+    return res;
 }

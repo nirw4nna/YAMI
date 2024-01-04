@@ -76,6 +76,12 @@ extern "C" {
         int n_dim;
     };
 
+    enum yami_mask_flag : u8 {
+        LOWER,
+        EQUAL,
+        GREATER,
+    };
+
     static inline f64 yami_timer() noexcept {
         timespec ts{};
         clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -94,9 +100,10 @@ extern "C" {
     // ========================================================================
 
     // ========================== Tensor Manipulation =========================
-    extern __attribute__((malloc)) yami_tensor *yami_new_tensor(yami_context *ctx, int n_dim,
-                                                                const usize *dimensions,
-                                                                const char *label = "") noexcept;
+    extern yami_tensor *yami_new_tensor(yami_context *ctx, int n_dim,
+                                        const usize *dimensions,
+                                        const char *label = "",
+                                        void *data = nullptr) noexcept;
     extern yami_tensor *yami_tensor_1d(yami_context *ctx, const char *label,
                                        usize dim1) noexcept;
     extern yami_tensor *yami_tensor_2d(yami_context *ctx, const char *label,
@@ -107,6 +114,18 @@ extern "C" {
     extern yami_tensor *yami_tensor_4d(yami_context *ctx, const char *label,
                                        usize dim1, usize dim2,
                                        usize dim3, usize dim4) noexcept;
+    extern yami_tensor *yami_view_1d(yami_context *ctx, yami_tensor *x,
+                                     usize dim1, usize offset = 0) noexcept;
+    extern yami_tensor *yami_view_2d(yami_context *ctx, yami_tensor *x,
+                                     usize dim1, usize dim2,
+                                     usize offset = 0) noexcept;
+    extern yami_tensor *yami_view_3d(yami_context *ctx, yami_tensor *x,
+                                     usize dim1, usize dim2,
+                                     usize dim3, usize offset = 0) noexcept;
+    extern yami_tensor *yami_view_4d(yami_context *ctx, yami_tensor *x,
+                                     usize dim1, usize dim2,
+                                     usize dim3, usize dim4,
+                                     usize offset = 0) noexcept;
     // Reshape tensor x to the new dimensions.
     // If the new dimensions are compatible with the old ones x will be updated,
     // otherwise this is a NOP.
@@ -126,10 +145,15 @@ extern "C" {
     extern yami_tensor *yami_contiguous(yami_context *ctx, yami_tensor *x) noexcept;
     // Returns a tensors which is the lower triangular part of x with the other elements
     // set to mask. x must be at least a 2D tensor.
-    extern yami_tensor *yami_lt_mask(yami_context *ctx,
+    extern yami_tensor *yami_lt_mask(yami_context *,
                                      yami_tensor *x,
                                      f32 mask,
-                                     bool in_place = true) noexcept;
+                                     usize start_idx = 0) noexcept;
+    extern yami_tensor *yami_mask_if(yami_context *,
+                                     yami_tensor *x,
+                                     yami_mask_flag flag,
+                                     f32 val,
+                                     f32 mask) noexcept;
     extern yami_tensor *yami_embed(yami_context *ctx,
                                    const yami_tensor *x,
                                    const int *indexes,
@@ -139,6 +163,22 @@ extern "C" {
                                    usize n,
                                    int offset,
                                    int dim = -1) noexcept;
+    // Concatenate xa with xb, both xa and xb must have the same shape except for the dimension along which
+    // the concat will happen.
+    // Note: xa and xb are assumed to be contiguous.
+    extern yami_tensor *yami_concat(yami_context *ctx,
+                                    const yami_tensor *xa,
+                                    const yami_tensor *xb,
+                                    int dim = 0) noexcept;
+    // Copy x into res. This is a very dangerous function!
+    // Currently, there are no checks in place to verify whether the underlying
+    // buffer of res is big enough for x. Also, after this call all the information
+    // regarding the original size and shape of res will be lost.
+    // Fixme: we need to add an object that describes the "backend" of a tensor,
+    //  there we could store information such as the actual size of the underlying buffer
+    //  as well as where it's actually stored (RAM, GPU, ...)
+    extern void yami_copy(const yami_tensor *x,
+                          yami_tensor *res) noexcept;
     // ========================================================================
 
     // =========================== Tensor Operations ==========================
@@ -203,7 +243,7 @@ extern "C" {
                                  int dim) noexcept;
     extern yami_tensor *yami_softmax(yami_context *ctx,
                                      yami_tensor *x,
-                                     int dim) noexcept;
+                                     int dim = -1) noexcept;
     extern yami_tensor *yami_layer_norm(yami_context *ctx,
                                         const yami_tensor *w,
                                         const yami_tensor *b,

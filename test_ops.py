@@ -26,6 +26,20 @@ def random_ndarray(*dims: int) -> np.ndarray:
     return (RNG.random(dims, dtype=np.float32) + 100).astype(np.float32)
 
 
+"""
+example generic function to benchmark
+def bench(f, *args):
+    for i in range(10):
+        f(*args)
+
+    s = time.time()
+    for i in range(100):
+        f(*args)
+    e = time.time()
+    return e - s
+"""
+
+
 def _bench_matmul(ctx: YamiContext, dim_a: tuple[int, ...], dim_b: tuple[int, ...]):
     target_a = random_ndarray(*dim_a)
     target_b = random_ndarray(*dim_b)
@@ -94,19 +108,7 @@ class TestMatmul:
         # Test the most critical matmul used in GPT2
         ctx = YamiContext(1024*1024*1024*5, 12)
 
-        _bench_matmul(ctx, (1024, 12, 11, 64), (1024, 12, 64, 11))
-        ctx.clear()
-
-        _bench_matmul(ctx, (768, 768), (768, 4))
-        ctx.clear()
-
-        _bench_matmul(ctx, (1024, 12, 11, 11), (1024, 12, 11, 64))
-        ctx.clear()
-
-        _bench_matmul(ctx, (1024, 11, 768), (768, 768))
-        ctx.clear()
-
-        _bench_matmul(ctx, (11, 768), (768, 50257))
+        _bench_matmul(ctx, (104, 768), (768, 50257))
         ctx.clear()
 
     def test_3d(self):
@@ -294,7 +296,6 @@ class TestDiv:
             ctx.report_usage()
             ctx.clear()
 
-
 # def test_tanh():
 #     ctx = YamiContext(1024*1024*50)
 #     for step in range(TEST_STEPS):
@@ -387,7 +388,6 @@ def test_softmax():
                                   1 if randint(0, 100) % 2 == 0 else n,
                                   1 if randint(0, 100) % 2 == 0 else m,
                                   1 if randint(0, 100) % 2 == 0 else j)
-        # target_a = np.array([1, 2, 4, -1, 6, -8, 4, 2, 3, 8, 6, -1], dtype=np.float32).reshape(2, 3, 2)
 
         dim = randint(-4, 3)
         print(f'softmax over axis={dim}')
@@ -594,3 +594,27 @@ def test_split():
 
     ctx.report_usage()
 
+
+def test_concat():
+    ctx = YamiContext(1024*1024*1024)
+
+    for step in range(TEST_STEPS):
+        print(f'\n================================ test_concat {step+1}/{TEST_STEPS} ================================\n')
+        n = randint(2, 50)
+        m = randint(2, 50)
+        k = randint(2, 50)
+        j = randint(2, 50)
+        target_a = random_ndarray(k, n, m, j)
+        target_b = random_ndarray(k, n, m, j)
+        for axis in range(-4, 4, 1):
+            target_res = np.concatenate((target_a, target_b), axis=axis)
+            print(f'\n>>> Concat {target_a.shape} with {target_b.shape} along axis={axis}\n')
+            my_a = YamiTensor.from_np(ctx, 'my_a', target_a)
+            my_b = YamiTensor.from_np(ctx, 'my_b', target_b)
+
+            my_res = yami_concat(ctx, my_a, my_b, dim=axis)
+
+            assert all_close(my_res.as_np(), target_res)
+
+            ctx.report_usage()
+            ctx.clear()
