@@ -88,12 +88,20 @@ struct yami_task {
     const yami_tensor *xb;
     yami_tensor *res;
     yami_dim_range ranges;
+    // Counter shared between all the workers, used to determine whether they have finished or not.
     std::atomic_int *progress_counter;
     yami_op op;
 };
 
 struct yami_worker {
     pthread_t id;
+    // The current implementation uses a spinlock in the "father" thread (0th thread) to wait for its "children" completion
+    // and a condition variable in said children to wait for work.
+    // Performance-wise this is a suboptimal choice as there will inevitably be some OS-related delay between when the father signals
+    // and the child actually receives that signal. This is not the case with a spinlock however the spinlock will cause
+    // higher utilization (all the cores will be maxed-out until the inference is done) since the children are created only once
+    // and are utilized only (at least for now) to speed-up matmuls which means they are quite often idle.
+    bool has_work;
     pthread_cond_t cond;
     pthread_mutex_t mtx;
     yami_task task;
@@ -312,7 +320,10 @@ static void *yami_worker_thread(void *arg) noexcept {
     bool exit = false;
     while (true) {
         pthread_mutex_lock(&self->mtx);
-        pthread_cond_wait(&self->cond, &self->mtx);
+        while (!self->has_work)
+            pthread_cond_wait(&self->cond, &self->mtx);
+
+        self->has_work = false;
         pthread_mutex_unlock(&self->mtx);
 
         // We don't need to hold the lock as the master thread will wait for completion before setting another task
@@ -385,6 +396,7 @@ yami_context *yami_init(const yami_context_init_params params) noexcept {
             yami_worker *worker = &ctx->workers[i-1];
             pthread_mutex_init(&worker->mtx, nullptr);
             pthread_cond_init(&worker->cond, nullptr);
+            worker->has_work = false;
             pthread_create(&worker->id, nullptr, yami_worker_thread, worker);
 
             // Set affinity
@@ -431,6 +443,7 @@ void yami_free(yami_context *ctx) noexcept {
             pthread_mutex_lock(&worker->mtx);
 
             worker->task.op = YAMI_OP_DONE;
+            worker->has_work = true;
 
             pthread_cond_signal(&worker->cond);
             pthread_mutex_unlock(&worker->mtx);
@@ -463,8 +476,12 @@ yami_context *yami_ctx_scratch(yami_context *ctx) noexcept {
     return ctx->scratch;
 }
 
+usize yami_used_mem(const yami_context *ctx) noexcept {
+    return ctx->last == nullptr ? 0 : ctx->last->offset + ctx->last->obj_size;
+}
+
 void yami_mem_usage(const yami_context *ctx) noexcept {
-    const usize used = ctx->last == nullptr ? 0 : ctx->last->offset + ctx->last->obj_size;
+    const usize used = yami_used_mem(ctx);
     YAMI_LOG_INFO("n_objs=%d used memory %.2fMB out of %ldMB (%.2f%%)",
                   ctx->n_objs,
                   YAMI_B_TO_MB(used),
@@ -907,6 +924,7 @@ yami_tensor *yami_matmul(yami_context *ctx, const yami_tensor *xa,
     }
     YAMI_ASSERT(match);
 
+    // Todo: do some research on the SOTA techniques for parallel matmul and write some documentation for this!
     int max_idx = 0;
     usize max = res->extended_dim[0];
     for (int i = 1; i < YAMI_MAX_DIMS; ++i) {
@@ -957,6 +975,7 @@ yami_tensor *yami_matmul(yami_context *ctx, const yami_tensor *xa,
             memcpy(t->ranges, ranges, sizeof(yami_dim_range));
             t->progress_counter = &progress;
             t->op = YAMI_OP_MATMUL;
+            worker->has_work = true;
 
             pthread_cond_signal(&worker->cond);
             pthread_mutex_unlock(&worker->mtx);
@@ -968,14 +987,18 @@ yami_tensor *yami_matmul(yami_context *ctx, const yami_tensor *xa,
 
         if (single_worker) break;
     }
-    while (progress.load() != w);
+    while (progress.load() != w)
+        ;
 
 //    const f64 stop__ = yami_timer();
 //    printf("%.3f\n", (stop__ - start__) * 1000.);
-//    YAMI_LOG_INFO("[%ld, %ld, %ld, %ld] x [%ld, %ld, %ld, %ld] took %fms",
-//                  xa->extended_dim[0], xa->extended_dim[1], xa->extended_dim[2], xa->extended_dim[3],
-//                  xb->extended_dim[0], xb->extended_dim[1], xb->extended_dim[2], xb->extended_dim[3],
-//                  (stop__ - start__) * 1000.);
+//    if (count > 200) {
+//        YAMI_LOG_INFO("[%ld, %ld, %ld, %ld] x [%ld, %ld, %ld, %ld] took %fms",
+//                      xa->extended_dim[0], xa->extended_dim[1], xa->extended_dim[2], xa->extended_dim[3],
+//                      xb->extended_dim[0], xb->extended_dim[1], xb->extended_dim[2], xb->extended_dim[3],
+//                      (stop__ - start__) * 1000.);
+//    }
+
     return res;
 }
 

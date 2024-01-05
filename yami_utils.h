@@ -30,12 +30,16 @@ struct yami_perf_metrics {
     f64 generation;
     f64 sampling;
     f64 total;
+    usize model_memory;
+    usize inference_memory;
     int generated_tokens;
     int prompt_tokens;
 
     inline void report() const noexcept {
         YAMI_LOG_INFO("prompt tokens\t\t= %d", prompt_tokens);
         YAMI_LOG_INFO("generated tokens\t= %d", generated_tokens);
+        YAMI_LOG_INFO("model size\t\t= %.2f MB", YAMI_B_TO_MB(model_memory));
+        YAMI_LOG_INFO("inference memory\t= %.2f MB", YAMI_B_TO_MB(inference_memory / generated_tokens));
         YAMI_LOG_INFO("encode time\t\t= %.2fms", encode * 1000.);
         YAMI_LOG_INFO("generation time\t\t= %.2fms\t(%.2fms/tok,\t%.2f tokens/s)",
                       generation * 1000.,

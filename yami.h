@@ -96,6 +96,7 @@ extern "C" {
 
     // ================================= Misc =================================
     extern yami_context *yami_ctx_scratch(yami_context *ctx) noexcept;
+    extern usize yami_used_mem(const yami_context *ctx) noexcept;
     extern void yami_mem_usage(const yami_context *ctx) noexcept;
     // ========================================================================
 

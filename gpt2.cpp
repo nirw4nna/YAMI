@@ -88,6 +88,7 @@ struct gpt2_model {
         YAMI_LOG_INFO("block size\t\t= %d", hp.block_size);
         YAMI_LOG_INFO("KV cache size\t= %ld MB", (usize) YAMI_B_TO_MB(kv_ne * 2 * hp.n_layers * sizeof(f32)));
         yami_mem_usage(ctx);
+        metrics.model_memory = yami_used_mem(ctx);
         printf("============================================================================\n");
     }
 
@@ -276,14 +277,17 @@ int main(int argc, char **argv) {
         }
         gpt2.metrics.sampling += (yami_timer() - sampling_start);
 
+        if (next_tok == 50256) // end-of-text
+            break;
+
         printf("%s", gpt2.tokenizer->decode(next_tok).c_str());
         fflush(stdout);
-        if (next_tok == 50256)
-            break;
 
         ctx_size += generated.size();
         generated.clear();
         generated.push_back(next_tok);
+
+        gpt2.metrics.inference_memory += yami_used_mem(scratch_ctx);
     }
     gpt2.metrics.total = yami_timer() - start_time;
 
