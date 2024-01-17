@@ -7,8 +7,14 @@
 #include <limits>
 #include <ctime>
 
-#define YAMI_LOG_INFO(format, ...)  fprintf(stdout, "%s: " format"\n",__func__, ##__VA_ARGS__)
+#define YAMI_LOG_FATAL(format, ...) \
+    do {                            \
+        YAMI_LOG_ERR(format, ##__VA_ARGS__);    \
+        exit(EXIT_FAILURE);                     \
+    } while(0)
+
 #define YAMI_LOG_ERR(format, ...)   fprintf(stderr, "%s: " format"\n",__func__, ##__VA_ARGS__)
+#define YAMI_LOG_INFO(format, ...)  fprintf(stdout, "%s: " format"\n",__func__, ##__VA_ARGS__)
 
 #define YAMI_ASSERT(x)  \
     do{                 \

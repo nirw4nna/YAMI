@@ -53,7 +53,7 @@ static inline int from_utf8(const std::string& text, usize *offset = nullptr) no
         b0 = ((b0 & 0x1F) << 6) | (text[*offset + 1] & 0x3F);
         (*offset) += 2;
     } else {
-        YAMI_ASSERT(false);
+        YAMI_LOG_FATAL("unsupported UTF-8 0x%X", b0);
     }
 
     return b0;
@@ -98,7 +98,7 @@ yami_bpe_tokenizer::yami_bpe_tokenizer(const std::vector<std::string>& bpe_pairs
     }
 }
 
-static inline std::unordered_set<std::string> yami_get_bigrams(const std::vector<std::string>& word) noexcept {
+static inline std::unordered_set<std::string> get_bigrams(const std::vector<std::string>& word) noexcept {
     std::unordered_set<std::string> bigrams;
 
     std::string prev = word[0];
@@ -244,7 +244,7 @@ std::vector<int> yami_bpe_tokenizer::encode(const std::string& text) noexcept {
         // 2. Perform the merges
 
         // 2.1 Get all the bigrams in the encoded token
-        bigrams = yami_get_bigrams(encoded_tok);
+        bigrams = get_bigrams(encoded_tok);
 
         if (!bigrams.empty()) {
             while (true) {
@@ -295,7 +295,7 @@ std::vector<int> yami_bpe_tokenizer::encode(const std::string& text) noexcept {
                 encoded_tok = std::move(merged_tok);
                 if (encoded_tok.size() == 1)
                     break;
-                bigrams = yami_get_bigrams(encoded_tok);
+                bigrams = get_bigrams(encoded_tok);
             }
         }
         for (const auto &et : encoded_tok)
@@ -329,9 +329,8 @@ void yami_load_model(yami_context *ctx, yami_model *model, const char *yami_file
     usize n;
     n = fread(&head, 1, 3, f);
     if (n != 3 || YAMI_MAGIC != head) {
-        YAMI_LOG_ERR("wrong header %08X", head);
         fclose(f);
-        exit(EXIT_FAILURE);
+        YAMI_LOG_FATAL("wrong header \"%08X\" expected \"%08X\"", head, YAMI_MAGIC);
     }
     fseek(f, 0, SEEK_END);
     const size file_size = ftell(f);
@@ -342,8 +341,7 @@ void yami_load_model(yami_context *ctx, yami_model *model, const char *yami_file
     void *data = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
     fclose(f);
     if (data == MAP_FAILED) {
-        YAMI_LOG_ERR("error mapping %s to memory", yami_file);
-        exit(EXIT_FAILURE);
+        YAMI_LOG_FATAL("error mapping \"%s\" to memory", yami_file);
     }
 
     const u8 *ptr = (const u8 *)data;
@@ -422,9 +420,9 @@ static usize parse_mem_arg(const char *const mem_str) noexcept {
     char *multiplier;
     usize mem = (usize) ::strtol(mem_str, &multiplier, 10);
     if (errno == ERANGE || errno == EINVAL) {
-        fprintf(stderr, "\"%s\" is not a valid memory size.\n", mem_str);
-        exit(EXIT_FAILURE);
+        YAMI_LOG_FATAL("\"%s\" is not a valid memory size", mem_str);
     }
+
     switch (multiplier[0]) {
         case 0:
             break;
@@ -438,8 +436,7 @@ static usize parse_mem_arg(const char *const mem_str) noexcept {
             mem *= 1024 * 1024 * 1024L;
             break;
         default:
-            fprintf(stderr, "Unknown multiplier \"%c\".\n", multiplier[0]);
-            exit(EXIT_FAILURE);
+            YAMI_LOG_FATAL("unknown multiplier \"%c\"", multiplier[0]);
     }
 
     return mem;
@@ -461,22 +458,19 @@ void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexce
             } else if (strcmp("-w", argv[i]) == 0 || strcmp("--workers", argv[i]) == 0) {
                 const int n_workers = (int) ::strtol(argv[++i], nullptr, 10);
                 if (errno == ERANGE || errno == EINVAL) {
-                    fprintf(stderr, "\"%s\" is not a valid number of workers.\n", argv[i]);
-                    exit(EXIT_FAILURE);
+                    YAMI_LOG_FATAL("\"%s\" is not a valid number of workers", argv[i]);
                 }
                 settings->n_workers = n_workers;
             } else if (strcmp("-t", argv[i]) == 0 || strcmp("--temp", argv[i]) == 0) {
                 const f32 temp = ::strtof(argv[++i], nullptr);
                 if (errno == ERANGE) {
-                    fprintf(stderr, "\"%s\" is not a valid temperature.\n", argv[i]);
-                    exit(EXIT_FAILURE);
+                    YAMI_LOG_FATAL("\"%s\" is not a valid temperature", argv[i]);
                 }
                 settings->temperature = temp;
             } else if (strcmp("-k", argv[i]) == 0 || strcmp("--top-k", argv[i]) == 0) {
                 const int top_k = (usize) ::strtol(argv[++i], nullptr, 10);
                 if (errno == ERANGE || errno == EINVAL) {
-                    fprintf(stderr, "\"%s\" is not a valid value for K.\n", argv[i]);
-                    exit(EXIT_FAILURE);
+                    YAMI_LOG_FATAL("\"%s\" is not a valid value for K", argv[i]);
                 }
                 settings->top_k = top_k;
             } else if (strcmp("-m", argv[i]) == 0 || strcmp("--model", argv[i]) == 0) {
@@ -484,15 +478,13 @@ void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexce
             } else if (strcmp("-s", argv[i]) == 0 || strcmp("--seed", argv[i]) == 0) {
                 const usize seed = (usize) ::strtol(argv[++i], nullptr, 10);
                 if (errno == ERANGE || errno == EINVAL) {
-                    fprintf(stderr, "\"%s\" is not a valid seed.\n", argv[i]);
-                    exit(EXIT_FAILURE);
+                    YAMI_LOG_FATAL("\"%s\" is not a valid seed", argv[i]);
                 }
                 settings->seed = seed;
             } else if (strcmp("-n", argv[i]) == 0 || strcmp("--new-tokens", argv[i]) == 0) {
                 const int n = (int) ::strtol(argv[++i], nullptr, 10);
                 if (errno == ERANGE || errno == EINVAL) {
-                    fprintf(stderr, "\"%s\" is not a valid number of tokens.\n", argv[i]);
-                    exit(EXIT_FAILURE);
+                    YAMI_LOG_FATAL("\"%s\" is not a valid number of tokens", argv[i]);
                 }
                 settings->n_tokens = n;
             } else if (strcmp("-M", argv[i]) == 0 || strcmp("--main-mem", argv[i]) == 0) {
@@ -518,8 +510,7 @@ void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexce
     }
 
     if (settings->prompt.empty()) {
-        fprintf(stderr, "Missing input prompt.\n");
-        exit(EXIT_FAILURE);
+        YAMI_LOG_FATAL("missing input prompt");
     }
 }
 

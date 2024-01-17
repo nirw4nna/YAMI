@@ -1,4 +1,4 @@
-#include "../yami.h"
+#include "yami.h"
 #include <x86intrin.h>
 
 static yami_tensor *random2d(yami_context *ctx, const char *label,

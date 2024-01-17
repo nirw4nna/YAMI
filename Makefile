@@ -1,8 +1,9 @@
-TEST_TARGETS = test/test_matmul
+#TESTS_TARGETS = tests/test_matmul
 
 CXX			=	g++
 # -fno-align-loops -fno-align-labels are interesting options, they should provide (at least the second one) some benefits
-CXXFLAGS	=	-std=c++17 -Wall -Wextra -Wshadow -Wformat -Wnoexcept -Wcast-qual -Wunused -Wdouble-promotion \
+# also -fprefetch-loop-arrays
+CXXFLAGS	=	-std=c++17 -I./include/ -Wall -Wextra -Wshadow -Wformat -Wnoexcept -Wcast-qual -Wunused -Wdouble-promotion \
  				-Wlogical-op -Wcast-align -fno-exceptions -fno-rtti -pthread
 LDFLAGS		=	-lm
 
@@ -13,8 +14,10 @@ ifeq ($(UNAME_M),$(filter $(UNAME_M),x86_64))
 	CXXFLAGS	+= 	-march=native -mtune=native
 endif
 
+# At some point I should introduce "levels", for example logging each time a tensor is created could be enabled
+# only at the highest debug level.
 ifdef YAMI_FAST
-	CXXFLAGS	+= -Ofast -flto=auto -fuse-linker-plugin -DYAMI_FAST
+	CXXFLAGS	+= -Ofast -g -flto=auto -fuse-linker-plugin -DYAMI_FAST
 else
 	CXXFLAGS	+= -O0 -g -DYAMI_DEBUG
 endif
@@ -29,18 +32,17 @@ $(info   LDFLAGS:	$(LDFLAGS))
 $(info   CXX:		$(shell $(CXX) --version | head -n 1))
 $(info )
 
-all: clean pyyami gpt2
 
 .PHONY: clean pyyami gpt2
 
 clean:
-	rm -rf *.o *.so $(TEST_TARGETS) mlp gpt2 main
+	rm -rf *.o *.so gpt2
 
-pyyami: yami.cpp
+pyyami: src/yami.cpp include/yami.h
 	$(CXX) $(CXXFLAGS) -fPIC -shared $< -o yami.so
 
-test: $(TEST_TARGETS)
-	@#fail=0; \
+#test: $(TESTS_TARGETS)
+#	@#fail=0; \
 #	total_tests=0; \
 #	for t in $(TEST_TARGETS); do \
 #  	  echo "======================================"; \
@@ -60,14 +62,14 @@ test: $(TEST_TARGETS)
 #	  echo "All tests passed!"; \
 #	fi;
 
-yami.o: yami.cpp yami.h
+yami.o: src/yami.cpp include/yami.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-yami_utils.o: yami_utils.cpp yami_utils.h
+yami_utils.o: src/yami_utils.cpp include/yami_utils.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-gpt2: gpt2.cpp yami.o yami_utils.o
+gpt2: models/gpt2.cpp yami.o yami_utils.o
 	$(CXX) $(CXXFLAGS) $< -o $@ yami.o yami_utils.o $(LDFLAGS)
 
-test/test_matmul: test/test_matmul.cpp yami.o
-	$(CXX) $(CXXFLAGS) $< -o $@ yami.o $(LDFLAGS)
+#tests/test_matmul: tests/test_matmul.cpp yami.o
+#	$(CXX) $(CXXFLAGS) $< -o $@ yami.o $(LDFLAGS)

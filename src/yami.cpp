@@ -68,9 +68,6 @@
 
 #define yami_tensor_get_ext_dim(PTR, dim) (dim) + (YAMI_MAX_DIMS - (PTR->n_dim))
 
-#define yami_push(CTX)  const usize ctx_size__ = CTX->n_objs; yami_obj *ctx_last__ = CTX->last
-#define yami_pop(CTX)   CTX->n_objs = ctx_size__; CTX->last = ctx_last__
-
 #define YAMI_RANGE_START    ((int) 0)
 #define YAMI_RANGE_STOP     ((int) 1)
 #define YAMI_BLOCK_SIZE     ((usize) 32)
@@ -890,8 +887,7 @@ yami_tensor *yami_matmul(yami_context *ctx, const yami_tensor *xa,
                          const yami_tensor *xb, yami_tensor *res) noexcept {
     // Verify that the two matrices are at least 2-dimensional
     if (xa->n_dim < 2 || xb->n_dim < 2) {
-        YAMI_LOG_ERR("too few dimensions, use yami_mul for 1D tensor multiply");
-        exit(EXIT_FAILURE);
+        YAMI_LOG_FATAL("too few dimensions, use yami_mul for 1D tensor multiply");
     }
 
 //    const f64 start__ = yami_timer();
@@ -902,10 +898,9 @@ yami_tensor *yami_matmul(yami_context *ctx, const yami_tensor *xa,
     const usize xb_n_cols = xb->dimensions[yami_tensor_get_dim(xb, -1)];
 
     if (xa_n_cols != xb_n_rows) {
-        YAMI_LOG_ERR("can't multiply (%ld, %ld) by (%ld, %ld)",
+        YAMI_LOG_FATAL("can't multiply (%ld, %ld) by (%ld, %ld)",
                      xa_n_rows, xa_n_cols,
                      xb_n_rows, xb_n_cols);
-        exit(EXIT_FAILURE);
     }
 
     YAMI_ASSERT(yami_can_broadcast(xa, xb, YAMI_MAX_DIMS - 2));
@@ -924,80 +919,96 @@ yami_tensor *yami_matmul(yami_context *ctx, const yami_tensor *xa,
     }
     YAMI_ASSERT(match);
 
-    // Todo: do some research on the SOTA techniques for parallel matmul and write some documentation for this!
-    int max_idx = 0;
-    usize max = res->extended_dim[0];
-    for (int i = 1; i < YAMI_MAX_DIMS; ++i) {
-        const usize el = res->extended_dim[i];
-        if (el > max) {
-            max = el;
-            max_idx = i;
-        }
+    const int n_workers = ctx->n_workers;
+
+    YAMI_TENSOR_DIMS(res, 3);
+
+//    yami_dim_range ranges[12];
+    yami_dim_range *ranges = (yami_dim_range *) alloca(n_workers * sizeof(yami_dim_range));
+    // Initialize all the ranges
+    for (int i = 0; i < n_workers; ++i) {
+        ranges[i][0][YAMI_RANGE_START] = 0, ranges[i][0][YAMI_RANGE_STOP] = d0_res;
+        ranges[i][1][YAMI_RANGE_START] = 0, ranges[i][1][YAMI_RANGE_STOP] = d1_res;
+        ranges[i][2][YAMI_RANGE_START] = 0, ranges[i][2][YAMI_RANGE_STOP] = d2_res;
+        ranges[i][3][YAMI_RANGE_START] = 0, ranges[i][3][YAMI_RANGE_STOP] = d3_res;
     }
 
-    yami_dim_range ranges;
-    const int n_workers = ctx->n_workers;
     std::atomic_int progress(1);
     int w = 0;
-    bool single_worker = false;
-    while (w < n_workers) {
-        const bool process_leftovers = w == n_workers - 1;
-        for (int i = 0; i < YAMI_MAX_DIMS; ++i) {
-            const usize dim = res->extended_dim[i];
-            if (i == max_idx) {
-                if (max < (usize) n_workers) {
-                    ranges[max_idx][YAMI_RANGE_START] = 0;
-                    ranges[max_idx][YAMI_RANGE_STOP] = dim;
-                    single_worker = true;
-                } else {
-                    const usize split = max / (usize) n_workers;
-                    const usize start = split * w;
-                    ranges[max_idx][YAMI_RANGE_START] = start;
-                    ranges[max_idx][YAMI_RANGE_STOP] = start + split;
-                    if (process_leftovers) {
-                        ranges[max_idx][YAMI_RANGE_STOP] = dim;
-                    }
-                }
-            } else {
-                ranges[i][YAMI_RANGE_START] = 0;
-                ranges[i][YAMI_RANGE_STOP] = dim;
+    // If one of the batch dimensions is >= than the number of workers, split on that dimension.
+    if (d0_res >= (usize) n_workers) {
+        // Todo: collapse two branches
+        const usize n = d0_res / n_workers;
+        for (usize ni = 0; ni < n; ++ni) {
+            const usize start = ni * n, stop = ni != n - 1 ? YAMI_MIN(ni * n + n, d0_res) : d0_res;
+            ranges[w][0][YAMI_RANGE_START] = start, ranges[w][0][YAMI_RANGE_STOP] = stop;
+            w++;
+        }
+    } else if (d1_res >= (usize) n_workers) {
+        const usize n = d1_res / n_workers;
+        for (usize ni = 0; ni < n; ++ni) {
+            const usize start = ni * n, stop = ni != n - 1 ? YAMI_MIN(ni * n + n, d1_res) : d1_res;
+            ranges[w][1][YAMI_RANGE_START] = start, ranges[w][1][YAMI_RANGE_STOP] = stop;
+            w++;
+        }
+    } else {
+        // 2D partitioning algorithm:
+        // 1. define a grid of (tc x tr) threads
+        // 2. compute mi = n_rows_a / tr and nj = n_cols_b / tc
+        // 3. partition C in 2D such that Cij is a (mi x nj) matrix
+        // 4. partition A along the rows such that Ai is a (mi x k) matrix
+        // 5. partition B along the columns such that Bi is a (k x nj) matrix
+        // 6. compute Cij += Ai * Bj on each thread
+
+        // Todo: these must be defined in the context
+        const int tc = 12, tr = 1;
+
+        const usize mi = xa_n_rows >= tr ? (xa_n_rows / tr) : 1;
+        const usize nj = xb_n_cols >= tc ? (xb_n_cols / tc) : 1;
+
+        for (usize nr = 0; nr < tr; ++nr) {
+            for (usize nc = 0; nc < tc; ++nc) {
+                const usize start_r = nr * mi, stop_r = nr != (usize) tr - 1 ? YAMI_MIN(start_r + mi, d2_res) : d2_res;
+                const usize start_c = nc * nj, stop_c = nc != (usize) tc - 1 ? YAMI_MIN(start_c + nj, d3_res) : d3_res;
+                ranges[w][2][YAMI_RANGE_START] = start_r,  ranges[w][2][YAMI_RANGE_STOP] = stop_r;
+                ranges[w][3][YAMI_RANGE_START] = start_c,  ranges[w][3][YAMI_RANGE_STOP] = stop_c;
+                w++;
             }
         }
-        if (!process_leftovers && !single_worker) {
-            // enqueue task
-            yami_worker *worker = &ctx->workers[w];
-            pthread_mutex_lock(&worker->mtx);
-
-            yami_task *t = &worker->task;
-            t->xa = xa;
-            t->xb = xb;
-            t->res = res;
-            memcpy(t->ranges, ranges, sizeof(yami_dim_range));
-            t->progress_counter = &progress;
-            t->op = YAMI_OP_MATMUL;
-            worker->has_work = true;
-
-            pthread_cond_signal(&worker->cond);
-            pthread_mutex_unlock(&worker->mtx);
-        } else {
-            // execute it
-            yami_internal_matmul(xa, xb, res, ranges);
-        }
-        w++;
-
-        if (single_worker) break;
     }
+    // Enqueue tasks for the workers
+    for (int i = 1; i < w; ++i) {
+        yami_worker *worker = &ctx->workers[i-1];
+        pthread_mutex_lock(&worker->mtx);
+
+        yami_task *t = &worker->task;
+        t->xa = xa;
+        t->xb = xb;
+        t->res = res;
+        memcpy(t->ranges, ranges[i], sizeof(yami_dim_range));
+        t->progress_counter = &progress;
+        t->op = YAMI_OP_MATMUL;
+        worker->has_work = true;
+
+        pthread_cond_signal(&worker->cond);
+        pthread_mutex_unlock(&worker->mtx);
+    }
+    // Matrix C0,0 is always processed in the main thread
+    yami_internal_matmul(xa, xb, res, ranges[0]);
+
     while (progress.load() != w)
         ;
 
 //    const f64 stop__ = yami_timer();
-//    printf("%.3f\n", (stop__ - start__) * 1000.);
-//    if (count > 200) {
-//        YAMI_LOG_INFO("[%ld, %ld, %ld, %ld] x [%ld, %ld, %ld, %ld] took %fms",
-//                      xa->extended_dim[0], xa->extended_dim[1], xa->extended_dim[2], xa->extended_dim[3],
-//                      xb->extended_dim[0], xb->extended_dim[1], xb->extended_dim[2], xb->extended_dim[3],
-//                      (stop__ - start__) * 1000.);
-//    }
+
+//    printf("GEMM,[%ldx%ldx%ldx%ld],[%ldx%ldx%ldx%ld],%.3f\n",
+//           xa->extended_dim[0], xa->extended_dim[1], xa->extended_dim[2], xa->extended_dim[3],
+//           xb->extended_dim[0], xb->extended_dim[1], xb->extended_dim[2], xb->extended_dim[3],
+//           (stop__ - start__) * 1000.);
+//    YAMI_LOG_INFO("[%ld, %ld, %ld, %ld] x [%ld, %ld, %ld, %ld] took %fms",
+//                  xa->extended_dim[0], xa->extended_dim[1], xa->extended_dim[2], xa->extended_dim[3],
+//                  xb->extended_dim[0], xb->extended_dim[1], xb->extended_dim[2], xb->extended_dim[3],
+//                  (stop__ - start__) * 1000.);
 
     return res;
 }
@@ -1077,6 +1088,12 @@ static inline void yami_internal_vec_subc(f32 *out, const f32 *x,
         out[i] = x[i] - c;
 }
 
+static inline void yami_internal_c_vec_sub(f32 *out, const f32 c,
+                                           const f32 *x, const usize n) noexcept {
+    for (usize i = 0; i < n; ++i)
+        out[i] = c - x[i];
+}
+
 yami_tensor *yami_sub(yami_context *ctx, yami_tensor *xa,
                       const yami_tensor *xb, const bool in_place) noexcept {
     yami_tensor *res;
@@ -1103,10 +1120,16 @@ yami_tensor *yami_sub(yami_context *ctx, yami_tensor *xa,
         const usize res_offset = yami_offset(res, 2);
 
         if (scalar) {
-            const f32 c = xa_1_ne == 1 ? xa->data[xa_offset] : xb->data[xb_offset];
-            const f32 *data = xa_1_ne != 1 ? &xa->data[xa_offset] : &xb->data[xb_offset];
-            yami_internal_vec_subc(&res->data[res_offset],
-                                   data, c, n);
+            // fixme: this is a very very very ugly implementation, I have to find something better
+            //  for those operations that support broadcasting and are not commutative (sub, div for now)...
+            if (xa_1_ne == 1)
+                yami_internal_c_vec_sub(&res->data[res_offset],
+                                        xa->data[xa_offset],
+                                        &xb->data[xb_offset], n);
+            else
+                yami_internal_vec_subc(&res->data[res_offset],
+                                       &xa->data[xa_offset],
+                                       xb->data[xb_offset], n);
         } else {
             yami_internal_vec_sub(&res->data[res_offset],
                                   &xa->data[xa_offset],
@@ -1229,7 +1252,6 @@ yami_tensor *yami_div(yami_context *ctx, yami_tensor *xa,
         const usize xb_offset = yami_broadcast_offset(xb, 2);
 
         if (scalar) {
-            // fixme: this is a very very very ugly workaround...
             if (xa_1_ne == 1)
                 yami_internal_c_vec_div(&res->data[res_offset],
                                         xa->data[xa_offset],
@@ -1395,7 +1417,6 @@ yami_tensor *yami_max(yami_context *ctx, const yami_tensor *x,
 
 yami_tensor *yami_softmax(yami_context *ctx, yami_tensor *x,
                           const int dim) noexcept {
-    yami_push(ctx);
     yami_tensor *e_x = yami_exp(ctx,
                                 yami_sub(ctx,
                                          x,
@@ -1403,13 +1424,11 @@ yami_tensor *yami_softmax(yami_context *ctx, yami_tensor *x,
                                          true
                                 )
     );
-    yami_tensor *res = yami_div(ctx,
-                                e_x,
-                                yami_sum(ctx, e_x, dim),
-                                true
+    return yami_div(ctx,
+                    e_x,
+                    yami_sum(ctx, e_x, dim),
+                    true
     );
-    yami_pop(ctx);
-    return res;
 }
 
 yami_tensor *yami_layer_norm(yami_context *ctx, const yami_tensor *w,

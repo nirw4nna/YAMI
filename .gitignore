@@ -8,6 +8,9 @@ __pycache__/
 # Exclude YamiFile files
 *.ymf
 
+# Exclude CSV files (used for benchmarking)
+*.csv
+
 mlp
 gpt2
 !mlp/

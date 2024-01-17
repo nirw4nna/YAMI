@@ -20,7 +20,7 @@ from ctypes import (
     POINTER
 )
 
-_lib_file = f'{os.path.dirname(__file__)}/yami.so'
+_lib_file = f'{os.path.dirname(os.path.dirname(__file__))}/yami.so'
 if not os.path.exists(_lib_file):
     raise RuntimeError(f'Error loading YAMI shared object "${_lib_file}"')
 
@@ -142,6 +142,7 @@ class YamiTensor:
         ctypes.memmove(res._tensor_p.contents.data, x.ctypes.data, x.nbytes)
         return res
 
+    # Todo: rename in "numpy"?
     def as_np(self):
         t = self._tensor_p.contents
         dim_arr = []
@@ -149,9 +150,6 @@ class YamiTensor:
             dim_arr.append(t.dimensions[i])
 
         return np.ctypeslib.as_array(t.data, shape=tuple(dim_arr))
-
-    def reshape(self, *dims: int):
-        yami_reshape(self, *dims)
 
     def from_param(self):
         return self._tensor_p
@@ -191,7 +189,7 @@ _lib.yami_tensor_4d.restype = yami_tensor_p
 
 
 def yami_reshape(x: YamiTensor, *dims: c_size_t) -> YamiTensor:
-    return _lib.yami_reshape(x, len(dims), *dims)
+    return YamiTensor(_lib.yami_reshape(x, len(dims), *dims))
 
 
 _lib.yami_reshape.argtypes = [yami_tensor_p, c_int]
@@ -254,6 +252,14 @@ _lib.yami_add.argtypes = [yami_context_p, yami_tensor_p, yami_tensor_p, c_bool]
 _lib.yami_add.restype = yami_tensor_p
 
 
+def yami_sub(ctx: YamiContext, xa: YamiTensor, xb: YamiTensor, in_place: bool = False) -> YamiTensor:
+    return YamiTensor(_lib.yami_sub(ctx, xa, xb, in_place))
+
+
+_lib.yami_sub.argtypes = [yami_context_p, yami_tensor_p, yami_tensor_p, c_bool]
+_lib.yami_sub.restype = yami_tensor_p
+
+
 def yami_mul(ctx: YamiContext, xa: YamiTensor, xb: YamiTensor, in_place: bool = False) -> YamiTensor:
     return YamiTensor(_lib.yami_mul(ctx, xa, xb, in_place))
 
@@ -270,15 +276,7 @@ _lib.yami_div.argtypes = [yami_context_p, yami_tensor_p, yami_tensor_p, c_bool]
 _lib.yami_div.restype = yami_tensor_p
 
 
-# def yami_tanh(ctx: YamiContext, x: YamiTensor, in_place: c_bool = True) -> YamiTensor:
-#     return YamiTensor(_lib.yami_tanh(ctx, x, in_place))
-#
-#
-# _lib.yami_tanh.argtypes = [yami_context_p, yami_tensor_p, c_bool]
-# _lib.yami_tanh.restype = yami_tensor_p
-
-
-def yami_gelu(ctx: YamiContext, x: YamiTensor, in_place: c_bool = True) -> YamiTensor:
+def yami_gelu(ctx: YamiContext, x: YamiTensor, in_place: bool = True) -> YamiTensor:
     return YamiTensor(_lib.yami_gelu(ctx, x, in_place))
 
 
@@ -286,7 +284,7 @@ _lib.yami_gelu.argtypes = [yami_context_p, yami_tensor_p, c_bool]
 _lib.yami_gelu.restype = yami_tensor_p
 
 
-def yami_softmax(ctx: YamiContext, x: YamiTensor, dim: c_int) -> YamiTensor:
+def yami_softmax(ctx: YamiContext, x: YamiTensor, dim: int) -> YamiTensor:
     return YamiTensor(_lib.yami_softmax(ctx, x, dim))
 
 
@@ -294,7 +292,7 @@ _lib.yami_softmax.argtypes = [yami_context_p, yami_tensor_p, c_int]
 _lib.yami_softmax.restype = yami_tensor_p
 
 
-def yami_sum(ctx: YamiContext, x: YamiTensor, dim: c_int) -> YamiTensor:
+def yami_sum(ctx: YamiContext, x: YamiTensor, dim: int) -> YamiTensor:
     return YamiTensor(_lib.yami_sum(ctx, x, dim))
 
 
@@ -302,7 +300,7 @@ _lib.yami_sum.argtypes = [yami_context_p, yami_tensor_p, c_int]
 _lib.yami_sum.restype = yami_tensor_p
 
 
-def yami_max(ctx: YamiContext, x: YamiTensor, dim: c_int) -> YamiTensor:
+def yami_max(ctx: YamiContext, x: YamiTensor, dim: int) -> YamiTensor:
     return YamiTensor(_lib.yami_max(ctx, x, dim))
 
 
@@ -332,6 +330,22 @@ def yami_exp(ctx: YamiContext, x: YamiTensor, in_place: bool = True) -> YamiTens
 
 _lib.yami_exp.argtypes = [yami_context_p, yami_tensor_p, c_bool]
 _lib.yami_exp.restype = yami_tensor_p
+
+
+def yami_sqrt(ctx: YamiContext, x: YamiTensor, in_place: bool = True) -> YamiTensor:
+    return YamiTensor(_lib.yami_sqrt(ctx, x, in_place))
+
+
+_lib.yami_sqrt.argtypes = [yami_context_p, yami_tensor_p, c_bool]
+_lib.yami_sqrt.restype = yami_tensor_p
+
+
+def yami_square(ctx: YamiContext, x: YamiTensor, in_place: bool = True) -> YamiTensor:
+    return YamiTensor(_lib.yami_square(ctx, x, in_place))
+
+
+_lib.yami_square.argtypes = [yami_context_p, yami_tensor_p, c_bool]
+_lib.yami_square.restype = yami_tensor_p
 
 
 def yami_layer_norm(ctx: YamiContext, w: YamiTensor, b: YamiTensor, x: YamiTensor,
