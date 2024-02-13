@@ -1,19 +1,20 @@
 .idea/
 .vscode/
 __pycache__/
-.venv/
+venv
+# Original LLaMA checkpoints folder
+llama*-*b/
 
 *.o
 *.so
-# Exclude YamiFile files
-*.ymf
+# Exclude YAMI-specific files
+*.bin
 
 # Exclude CSV files (used for benchmarking)
 *.csv
 
-mlp
 gpt2
-!mlp/
+llama
 
 test_*
 !test_*.cpp

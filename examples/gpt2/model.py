@@ -4,7 +4,9 @@ from torch.nn import functional as F
 import math
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from bpe import Encoder
-import ctypes
+from torch.autograd import profiler
+import time
+from dataclasses import dataclass
 
 import sys
 from pathlib import Path
@@ -12,50 +14,22 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 # Simple trick to import a file from outside the default path.
 # To enable Pylance add this also to "Python > Analysis > Extra Paths"
-from convert_to_yami import export_model, YamiHparams
+from convert_yami import *
 
-class GPT2Params(YamiHparams):
-    _fields_ = [('n_layers', ctypes.c_uint32),
-                ('n_heads', ctypes.c_uint32),
-                ('emb_size', ctypes.c_uint32),
-                ('block_size', ctypes.c_uint32),
-                ('vocab_size', ctypes.c_uint32),]
 
-"""
-GPT-2 small:
-- 12 layers
-- 12 head of attention
-- 768 embedding size
+_MODEL_TYPE = 'gpt2'
 
-GPT-2 large:
-- 36 layers
-- 20 head of attention
-- 1280 embedding size
-"""
-# MODEL_TYPE = 'gpt2-large'
-MODEL_TYPE = 'gpt2'
-# Hyperparameters
 
-# GPT-2 small
-N_LAYERS = 12
-N_HEADS = 12
-EMB_SIZE = 768
-BLOCK_SIZE = 1024
-VOCAB_SIZE = 50257
+@dataclass
+class GPT2Hparams(Hparams):
+   # default hyperparameters for GPT-2 small
+   n_layers: int = 12
+   n_heads: int = 12
+   emb_size: int = 768
+   block_size: int = 1024
+   vocab_size: int = 50257
 
-# GPT-2 Large
-# N_LAYERS = 36
-# N_HEADS = 20
-# EMB_SIZE = 1280
-# BLOCK_SIZE = 1024
-# VOCAB_SIZE = 50257
 
-"""
-LayerNorm is very similar to BatchNorm, the objective is always to normalize (0 mean, 1 std) the samples
-but with BatchNorm we normalize a column, with LayerNorm we normalize the row.
-What this means is that the implementation is actually quite simpler because there is no need to keep track
-of the running mean and standard deviation, we can just compute them for each input we get.
-"""
 class LayerNorm(nn.Module):
 
   def __init__(self, n_features, epsilon=1e-5):
@@ -81,25 +55,30 @@ class GELU(nn.Module):
 
 
 class MultiheadAttention(nn.Module):
-    def __init__(self):
-       super().__init__()
-       # Stacked attention, contains the projections of both Q, K and V
-       self.c_attn = nn.Linear(EMB_SIZE, 3 * EMB_SIZE)
-       self.c_proj = nn.Linear(EMB_SIZE, EMB_SIZE)
-       # Causal mask
-       self.tril = torch.tril(torch.ones(BLOCK_SIZE, BLOCK_SIZE).view(1, 1, BLOCK_SIZE, BLOCK_SIZE))
-    
+    def __init__(self, hparams: GPT2Hparams):
+        super().__init__()
+        self.block_size = hparams.block_size
+        self.emb_size = hparams.emb_size
+        self.n_heads = hparams.n_heads
+        # Stacked attention, contains the projections of both Q, K and V
+        self.c_attn = nn.Linear(self.emb_size, 3 * self.emb_size)
+        self.c_proj = nn.Linear(self.emb_size, self.emb_size)
+        # Causal mask
+        self.tril = torch.tril(torch.ones(self.block_size, self.block_size).view(1, 1, self.block_size, self.block_size))
+
     def forward(self, x):
         B, T, C = x.shape # (block size, context size, emb size)
         # assert emb_size % n_head == 0
+        attn = self.c_attn(x)
+        q, k, v = attn.split(self.emb_size, dim=2) # (B, T, C)
+        q = q.view(B, T, self.n_heads, self.emb_size // self.n_heads).transpose(1, 2) # (B, nh, T, hs) given EMB_SIZE is a multiple of N_HEADS
+        k = k.view(B, T, self.n_heads, self.emb_size // self.n_heads).transpose(1, 2) # (B, nh, T, hs)
+        v = v.view(B, T, self.n_heads, self.emb_size // self.n_heads).transpose(1, 2) # (B, nh, T, hs)
 
-        q, k, v = self.c_attn(x).split(EMB_SIZE, dim=2) # (B, T, C)
-        q = q.view(B, T, N_HEADS, EMB_SIZE // N_HEADS).transpose(1, 2) # (B, nh, T, hs) given EMB_SIZE is a multiple of N_HEADS
-        k = k.view(B, T, N_HEADS, EMB_SIZE // N_HEADS).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, N_HEADS, EMB_SIZE // N_HEADS).transpose(1, 2) # (B, nh, T, hs)
-
+        k_t = k.transpose(-2, -1)
         # Self Attention (B, nh, T, hs) @ (B, nh, hs, T) = (B, nh, T, T)
-        attention = (q @ k.transpose(-2, -1)) * (q.size(-1) ** -0.5)
+        q_k = q @ k_t
+        attention = q_k * q.size(-1) ** -0.5
         attention = attention.masked_fill(self.tril[:, :, :T, :T] == 0, float('-inf'))
         attention = F.softmax(attention, dim=-1)
         out = attention @ v # (B, nh, T, T) @ (B, nh, T, hs) = (B, nh, T, hs)
@@ -109,14 +88,14 @@ class MultiheadAttention(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self):
+    def __init__(self, hparams: GPT2Hparams):
         super().__init__()
-        self.ln_1 = LayerNorm(EMB_SIZE)
-        self.attn = MultiheadAttention()
-        self.ln_2 = LayerNorm(EMB_SIZE)
+        self.ln_1 = LayerNorm(hparams.emb_size)
+        self.attn = MultiheadAttention(hparams)
+        self.ln_2 = LayerNorm(hparams.emb_size)
         self.mlp = nn.ModuleDict(dict(
-            c_fc = nn.Linear(EMB_SIZE, EMB_SIZE * 4),
-            c_proj = nn.Linear(EMB_SIZE * 4, EMB_SIZE),
+            c_fc = nn.Linear(hparams.emb_size, hparams.emb_size * 4),
+            c_proj = nn.Linear(hparams.emb_size * 4, hparams.emb_size),
             act = GELU()
         ))
 
@@ -128,28 +107,29 @@ class TransformerBlock(nn.Module):
 
 
 class GPT(nn.Module):
-    def __init__(self):
+    def __init__(self, hparams: GPT2Hparams):
         super().__init__()
+        self.hparams = hparams
         self.transformer = nn.ModuleDict(dict(
-           wpe = nn.Embedding(BLOCK_SIZE, EMB_SIZE), # token embedding
-           wte = nn.Embedding(VOCAB_SIZE, EMB_SIZE), # positional embedding
-           h = nn.ModuleList([TransformerBlock() for _ in range(N_LAYERS)]),
-           ln_f = LayerNorm(EMB_SIZE)
+            wpe = nn.Embedding(hparams.block_size, hparams.emb_size), # token embedding
+            wte = nn.Embedding(hparams.vocab_size, hparams.emb_size), # positional embedding
+            h = nn.ModuleList([TransformerBlock(hparams) for _ in range(hparams.n_layers)]),
+            ln_f = LayerNorm(hparams.emb_size)
         ))
-        self.lm_head = nn.Linear(EMB_SIZE, VOCAB_SIZE, bias=False)
-        
+        self.lm_head = nn.Linear(hparams.emb_size, hparams.vocab_size, bias=False)
+
         n_params = sum([p.numel() for p in self.transformer.parameters()])
         n_params += sum([p.numel() for p in self.lm_head.parameters()])
         print(f'Model has {round(n_params / 1e6)}M parameters')
 
     @classmethod
-    def from_hf(cls):
-        hf_model = GPT2LMHeadModel.from_pretrained(MODEL_TYPE)
+    def from_hf(cls, hparams: GPT2Hparams()):
+        hf_model = GPT2LMHeadModel.from_pretrained(_MODEL_TYPE)
         hf_data = hf_model.state_dict()
         # GPT2 uses Conv1D instead of a Linear layer which means we have to transpose the weights
         to_transpose = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
-        
-        my_model = GPT()
+
+        my_model = GPT(hparams)
         my_data = my_model.state_dict()
         assert len(my_data) == len(hf_data)
         for k, v in hf_data.items():
@@ -162,9 +142,18 @@ class GPT(nn.Module):
                 assert v.shape == my_data[k].shape
                 with torch.no_grad():
                     my_data[k].copy_(v)
-        
+
         return my_model
     
+    @staticmethod
+    def export(model_file: str, tokenizer_file: str):
+        hparams = GPT2Hparams()
+        model = GPT.from_hf(hparams)
+        model.eval()
+        tokenizer = Encoder.from_pretrained()
+        export_model(model_file, Model.GPT2, model.state_dict(), hparams,
+                     ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight', 'lm_head.weight'])
+        export_tokenizer(tokenizer_file, Tokenizer.BPE, encoder=tokenizer.encoder, vocab=tokenizer.bpe_ranks)
 
     def forward(self, idx):
         B, T = idx.shape
@@ -173,49 +162,57 @@ class GPT(nn.Module):
         x = tok_emb + pos_emb
         for block in self.transformer.h:
             x = block(x)
-        
+
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)
         return logits
 
-
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temp=1.0, sample=True):
         for _ in range(max_new_tokens):
-            idx_real = idx if len(idx) < BLOCK_SIZE else idx[:, -BLOCK_SIZE:]
+            start_ = time.perf_counter()
+            idx_real = idx if len(idx) < self.hparams.block_size else idx[:, -self.hparams.block_size:]
+            # with profiler.profile(record_shapes=True) as prof:
+            #     with profiler.record_function('model_inference'):
             logits = self(idx_real)
+
+            # print(prof.key_averages().table(sort_by="self_cpu_time_total", row_limit=5))
+            # matmul_events = [event for event in prof.function_events if "addmm" in event.name or "mm" in event.name]
+            # unique = set([e.name for e in prof.function_events])
+            # print(unique)
+            # print(f'\n\nNext token computation took {prof.self_cpu_time_total/1000.}ms:')
+            # total_time_us = 0
+            # for i, me in enumerate(prof.function_events):
+            #     print(f'\t{i}) {me.name} shapes={me.input_shapes} time={me.self_cpu_time_total_str}')
+            #     total_time_us += me.self_cpu_time_total
+
+            # print(f'Performing {len(matmul_events)} matmuls took {total_time_us / 1000.}ms')
             # Apply temperature to the last row of each bach
             logits = logits[:, -1, :] / temp
             # top_k?
+            v, _ = torch.topk(logits, 10)
+            logits[logits < v[:, [-1]]] = -float('Inf')
             probs = F.softmax(logits, dim=-1)
             if sample:
                 idx_next = torch.multinomial(probs, num_samples=1)
             else:
                 _, idx_next = torch.topk(probs, k=1, dim=-1)
             idx = torch.cat((idx, idx_next), dim=1)
-        
+            print(f'1 tok took {(time.perf_counter() - start_) * 1000.}ms')
+
         return idx
 
 
 if __name__ == '__main__':
-    gpt = GPT.from_hf()
-    # gpt = GPT2LMHeadModel.from_pretrained(MODEL_TYPE)
-    # hparams = GPT2Params()
-    # hparams.n_layers = N_LAYERS
-    # hparams.n_heads = N_HEADS
-    # hparams.emb_size = EMB_SIZE
-    # hparams.block_size = BLOCK_SIZE
-    # hparams.vocab_size = VOCAB_SIZE
-
-    # export_model(gpt.state_dict(), hparams, "gpt2.yami")
+    # GPT.export('yami_model.bin', 'yami_tokenizer.bin')
+    gpt = GPT2LMHeadModel.from_pretrained(_MODEL_TYPE)
+    n_tokens = 100
     gpt.eval()
-    # tokenizer = GPT2Tokenizer.from_pretrained(MODEL_TYPE)
     tokenizer = Encoder.from_pretrained()
-    while True:
-        proompt = input('YOU: ')
-        # encoded_proompt = tokenizer(proompt, return_tensors='pt')
-        encoded_proompt = [tokenizer.encode(proompt)]
-        # idx = encoded_proompt['input_ids']
-        idx = torch.tensor([[1, 2, 3]])
-        resp = tokenizer.decode(gpt.generate(idx, max_new_tokens=50).cpu().squeeze().tolist())
-        print(f'YAMI-GPT2: {resp}\n')
+    prompt = "Building a website can be done in ten simple steps"
+    encoded_prompt = [tokenizer.encode(prompt)]
+    idx = torch.tensor(encoded_prompt)
+    start = time.perf_counter()
+    resp = tokenizer.decode(gpt.generate(idx, max_new_tokens=n_tokens).cpu().squeeze().tolist())
+    print(f'GPT2: {resp}\n')
+    print(f'Time per token: {(time.perf_counter() - start) / n_tokens * 1000.}ms')
