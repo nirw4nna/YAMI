@@ -1,0 +1,34 @@
+import os
+import ctypes
+import numpy as np
+from ctypes import (
+    c_size_t,
+    c_ssize_t,
+    c_float,
+    c_double,
+    POINTER
+)
+c_usize = c_ssize_t
+
+c_float_p = POINTER(c_float)
+
+_lib_file = f'{os.path.dirname(__file__)}/{{ shared_obj }}'
+if not os.path.exists(_lib_file):
+    raise RuntimeError(f'Error loading shared object "{_lib_file}"')
+
+_lib = ctypes.CDLL(_lib_file)
+
+def {{ kernel }}(m: c_usize, n: c_usize, k: c_usize,
+                 a: np.ndarray, lda: c_usize,
+                 b: np.ndarray, ldb: c_usize,
+                 c: np.ndarray, ldc: c_usize) -> c_double:
+    return _lib.{{ kernel }}(m, n, k,
+                             a.ctypes.data_as(c_float_p), lda,
+                             b.ctypes.data_as(c_float_p), ldb,
+                             c.ctypes.data_as(c_float_p), ldc)
+
+_lib.{{ kernel }}.argtypes = [c_usize, c_usize, c_usize,
+                              c_float_p, c_usize,
+                              c_float_p, c_usize,
+                              c_float_p, c_usize]
+_lib.{{ kernel }}.restype = c_double

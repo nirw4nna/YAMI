@@ -20,6 +20,7 @@ test_*
 !test_*.cpp
 !test_*.py
 .pytest_cache
-
+# Generated kernel bindings
+_gemm_*.py
 # perf stats
 *.data*

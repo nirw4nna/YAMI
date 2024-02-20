@@ -25,8 +25,8 @@ from pyyami import *
 CSV_FILE = 'matmul.csv'
 PLOT = False
 SHOW_TOP = 10
-COLD_START = 2
-STEPS = 10
+WARMUP = 2
+STEPS = 5
 
 
 def _plot(delays, delay_per_element, delay_pyyami, delay_np, labels):
@@ -68,7 +68,7 @@ def _shape_arr(shape: str) -> list[int]:
 
 
 def _bench(func, *args) -> float:
-    for _ in range(COLD_START):
+    for _ in range(WARMUP):
         func(*args)
 
     start = time.perf_counter_ns()
