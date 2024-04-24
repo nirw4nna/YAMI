@@ -6,7 +6,7 @@
 #include <sys/sysinfo.h>
 #include <atomic>
 
-#ifdef __AVX2__
+#if defined(__AVX2__)
 #   include <immintrin.h>
 #endif
 
@@ -138,7 +138,7 @@ static void yami_set_tensor_dim(yami_tensor *x, const int n_dim,
     }
 }
 
-static bool yami_can_broadcast(const yami_tensor *xa, const yami_tensor *xb,
+static bool YAMI_PURE yami_can_broadcast(const yami_tensor *xa, const yami_tensor *xb,
                                const int dims_to_check = YAMI_MAX_DIMS) noexcept {
     bool can_broadcast = true;
     for (int i = 0; i < dims_to_check && can_broadcast; ++i) {
@@ -146,10 +146,6 @@ static bool yami_can_broadcast(const yami_tensor *xa, const yami_tensor *xb,
             continue;
 
         can_broadcast = false;
-    }
-
-    if (!can_broadcast) {
-        YAMI_LOG_ERR("can't broadcast tensors \"%s\" and \"%s\"", xa->label, xb->label);
     }
 
     return can_broadcast;
@@ -675,6 +671,7 @@ yami_tensor *yami_contiguous(yami_context *ctx, yami_tensor *x) noexcept {
     YAMI_TENSOR_STRIDES(res, 3);
 
     yami_for(x, 3) {
+        // Todo: blocking (block matrix ~ 50% L2 cache)
         res->data[yami_offset(res, 3)] = x->data[yami_offset(x, 3)];
     }
 
@@ -745,6 +742,39 @@ yami_tensor *yami_embed(yami_context *ctx, const yami_tensor *x,
     }
 
     return res;
+}
+
+yami_tensor *yami_rope(yami_context *, yami_tensor *x,
+                       const usize n, const bool k_mode,
+                       const usize start_idx) noexcept {
+    // Todo:
+    //  - in_place flag, for now it's always inplace
+    //  - tests
+    YAMI_TENSOR_FIELDS(x, 3);
+
+    YAMI_ASSERT(n <= d3_x);
+
+    for (usize d0 = 0; d0 < d0_x; ++d0) {
+        for (usize d1 = 0; d1 < d1_x; ++d1) {
+            // fixme: p is always start_idx + d1??
+            const usize p = k_mode ? (start_idx + d1) : d1;
+            for (usize d2 = 0; d2 < d2_x; ++d2) {
+                for (usize d3 = 0; d3 < n; d3 += 2) {
+                    // fixme: d3_x and n are always the same?
+                    const f32 theta = std::pow(10'000.f, ((f32) d3) / ((f32) n));
+                    const f32 cos_theta = std::cos(p * theta);
+                    const f32 sin_theta = std::sin(p * theta);
+
+                    const usize offset = yami_offset(x, 3);
+                    const f32 x0 = x->data[offset];
+                    const f32 x1 = x->data[offset + 1];
+                    x->data[offset] = x0 * cos_theta - x1 * sin_theta;
+                    x->data[offset + 1] = x0 * sin_theta + x1 * cos_theta;
+                }
+            }
+        }
+    }
+    return x;
 }
 
 yami_tensor *yami_split(yami_context *ctx, const yami_tensor *x,
@@ -1000,7 +1030,7 @@ yami_tensor *yami_matmul(yami_context *ctx, const yami_tensor *xa,
         ;
 
 //    const f64 stop__ = yami_timer();
-
+//
 //    printf("GEMM,[%ldx%ldx%ldx%ld],[%ldx%ldx%ldx%ld],%.3f\n",
 //           xa->extended_dim[0], xa->extended_dim[1], xa->extended_dim[2], xa->extended_dim[3],
 //           xb->extended_dim[0], xb->extended_dim[1], xb->extended_dim[2], xb->extended_dim[3],
@@ -1097,7 +1127,7 @@ static inline void yami_internal_c_vec_sub(f32 *out, const f32 c,
 yami_tensor *yami_sub(yami_context *ctx, yami_tensor *xa,
                       const yami_tensor *xb, const bool in_place) noexcept {
     yami_tensor *res;
-    if (!in_place){
+    if (!in_place) {
         res = yami_alloc_result(ctx, xa, xb);
     } else {
         YAMI_ASSERT(yami_can_broadcast(xa, xb));
@@ -1296,6 +1326,19 @@ yami_tensor *yami_gelu(yami_context *ctx, yami_tensor *x,
     return res;
 }
 
+yami_tensor *yami_swiglu(yami_context *ctx, yami_tensor *x,
+                         const bool in_place) noexcept {
+    yami_tensor *res = in_place ? x : yami_new_tensor(ctx, x->n_dim, x->dimensions);
+
+    // silu(x) = x * sigma(x) where sigma(x) = 1 / (1 + e^(-x))
+    for (usize i = 0; i < res->ne; ++i) {
+        const f32 val = res->data[i];
+        res->data[i] *= 1.f / (1.f + std::exp(-val));
+    }
+
+    return res;
+}
+
 yami_tensor *yami_sum(yami_context *ctx, const yami_tensor *x,
                       const int dim) noexcept {
     const int real_dim = yami_tensor_get_dim(x, dim);
@@ -1368,6 +1411,16 @@ yami_tensor *yami_sqrt(yami_context *ctx, yami_tensor *x,
     return res;
 }
 
+yami_tensor *yami_rsqrt(yami_context *ctx, yami_tensor *x,
+                       const bool in_place) noexcept {
+    yami_tensor *res = in_place ? x : yami_new_tensor(ctx, x->n_dim, x->dimensions);
+
+    for (usize i = 0; i < x->ne; ++i)
+        res->data[i] = 1.f / std::sqrt(x->data[i]);
+
+    return res;
+}
+
 yami_tensor *yami_square(yami_context *ctx, yami_tensor *x,
                          const bool in_place) noexcept {
 
@@ -1434,7 +1487,7 @@ yami_tensor *yami_softmax(yami_context *ctx, yami_tensor *x,
 yami_tensor *yami_layer_norm(yami_context *ctx, const yami_tensor *w,
                              const yami_tensor *b, yami_tensor *x,
                              const bool in_place, const f32 eps) noexcept {
-    // fixme: these two are tmp results that should be freed before returning
+    // Fixme: these two are tmp results that should be freed before returning
     yami_tensor *x_mean = yami_mean(ctx, x, -1);
     yami_tensor *x_var = yami_var(ctx, x, -1);
 
@@ -1451,4 +1504,27 @@ yami_tensor *yami_layer_norm(yami_context *ctx, const yami_tensor *w,
                     b,
                     true
     );
+}
+
+yami_tensor *yami_rms_norm(yami_context *ctx, const yami_tensor *w,
+                           yami_tensor *x, const bool in_place,
+                           const f32 eps) noexcept {
+    // Fixme: same issue as with layer norm: too many useless allocations
+    yami_tensor *x_mean = yami_mean(ctx,
+                                    yami_square(ctx, x, false),
+                                    -1);
+    yami_tensor *out = yami_mul(ctx,
+                                x,
+                                yami_rsqrt(ctx,
+                                          yami_addc(
+                                                  ctx,
+                                                  x_mean,
+                                                  eps
+                                          )
+                                ),
+                                in_place);
+    return yami_mul(ctx,
+                    out,
+                    w,
+                    true);
 }

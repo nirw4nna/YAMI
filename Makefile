@@ -1,8 +1,7 @@
-#TESTS_TARGETS = tests/test_matmul
+#TESTS_TARGETS = tests/test_quantize
+MODELS = gpt2 llama
 
 CXX			=	g++
-# -fno-align-loops -fno-align-labels are interesting options, they should provide (at least the second one) some benefits
-# also -fprefetch-loop-arrays
 CXXFLAGS	=	-std=c++17 -I./include/ -Wall -Wextra -Wshadow -Wformat -Wnoexcept -Wcast-qual -Wunused -Wdouble-promotion \
  				-Wlogical-op -Wcast-align -fno-exceptions -fno-rtti -pthread
 LDFLAGS		=	-lm
@@ -17,9 +16,9 @@ endif
 # At some point I should introduce "levels", for example logging each time a tensor is created could be enabled
 # only at the highest debug level.
 ifdef YAMI_FAST
-	CXXFLAGS	+= -Ofast -g -flto=auto -fuse-linker-plugin -DYAMI_FAST
+	CXXFLAGS	+= -DYAMI_FAST -Ofast -g -ffp-contract=fast -funroll-loops -flto=auto -fuse-linker-plugin
 else
-	CXXFLAGS	+= -O0 -g -DYAMI_DEBUG
+	CXXFLAGS	+= -DYAMI_DEBUG -O0 -g
 endif
 
 UNAME_S	=	$(shell uname -s)
@@ -32,19 +31,18 @@ $(info   LDFLAGS:	$(LDFLAGS))
 $(info   CXX:		$(shell $(CXX) --version | head -n 1))
 $(info )
 
-
-.PHONY: clean pyyami gpt2
+.PHONY: clean pyyami $(MODELS)
 
 clean:
-	rm -rf *.o *.so gpt2
+	rm -rf *.o *.so $(MODELS) $(TESTS_TARGETS)
 
 pyyami: src/yami.cpp include/yami.h
 	$(CXX) $(CXXFLAGS) -fPIC -shared $< -o yami.so
 
 #test: $(TESTS_TARGETS)
-#	@#fail=0; \
+#	@fail=0; \
 #	total_tests=0; \
-#	for t in $(TEST_TARGETS); do \
+#	for t in $(TESTS_TARGETS); do \
 #  	  echo "======================================"; \
 #	  echo "Running $$t"; \
 #  	  echo "======================================"; \
@@ -71,5 +69,5 @@ yami_utils.o: src/yami_utils.cpp include/yami_utils.h
 gpt2: models/gpt2.cpp yami.o yami_utils.o
 	$(CXX) $(CXXFLAGS) $< -o $@ yami.o yami_utils.o $(LDFLAGS)
 
-#tests/test_matmul: tests/test_matmul.cpp yami.o
-#	$(CXX) $(CXXFLAGS) $< -o $@ yami.o $(LDFLAGS)
+llama: models/llama.cpp yami.o yami_utils.o
+	$(CXX) $(CXXFLAGS) $< -o $@ yami.o yami_utils.o $(LDFLAGS)

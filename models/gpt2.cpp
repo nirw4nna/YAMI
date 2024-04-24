@@ -37,21 +37,25 @@ struct transformer_block {
 
 struct gpt2_model {
     gpt2_model(yami_context *context, const yami_model_settings *settings) : ctx(context) {
-        gpt2_hparams hp{};
         yami_model ym{};
-        ym.hparams = &hp;
+        ym.hparams = &hparams;
         const f64 load_start = yami_timer();
-        yami_load_model(ctx, &ym, settings->yami_file.c_str());
-
-        hparams = *((gpt2_hparams *) ym.hparams);
+        yami_load_model(ctx,
+                        &ym,
+                        settings->model_file.c_str(),
+                        settings->tokenizer_file.c_str(),
+                        settings->use_mmap
+        );
+        YAMI_ASSERT(ym.type == yami_models::GPT2 && ym.tokenizer == yami_tokenizers::BPE);
+        mmap = std::move(ym.mmap);
         tokenizer = std::make_unique<yami_bpe_tokenizer>(ym.vocab, ym.encoder);
 
         wte = ym.tensors["transformer.wte.weight"];
         wpe = ym.tensors["transformer.wpe.weight"];
 
-        h.resize(hp.n_layers);
+        h.resize(hparams.n_layers);
         const usize kv_ne = hparams.block_size * hparams.emb_size;
-        for (u32 i = 0; i < hp.n_layers; ++i) {
+        for (u32 i = 0; i < hparams.n_layers; ++i) {
             transformer_block *block = &h[i];
             block->ln_1_w = ym.tensors["transformer.h." + std::to_string(i) + ".ln_1.weight"];
             block->ln_1_b = ym.tensors["transformer.h." + std::to_string(i) + ".ln_1.bias"];
@@ -75,18 +79,19 @@ struct gpt2_model {
         ln_f_b = ym.tensors["transformer.ln_f.bias"];
         lm_head_w = ym.tensors["lm_head.weight"];
 
-        rng = std::mt19937(settings->seed);
+        rng = std::mt19937{settings->seed};
 
         YAMI_LOG_INFO("random seed\t\t= %ld", settings->seed);
         YAMI_LOG_INFO("temperature\t\t= %.2f", (f64) settings->temperature);
         YAMI_LOG_INFO("top k\t\t= %ld", settings->top_k);
+        YAMI_LOG_INFO("mmap\t\t= %s", settings->use_mmap ? "true" : "false");
         YAMI_LOG_INFO("load time\t\t= %.2fs", (yami_timer() - load_start));
-        YAMI_LOG_INFO("layers\t\t= %d", hp.n_layers);
-        YAMI_LOG_INFO("attention heads\t= %d", hp.n_heads);
-        YAMI_LOG_INFO("embedding size\t= %d", hp.n_heads);
-        YAMI_LOG_INFO("vocab size\t\t= %d", hp.vocab_size);
-        YAMI_LOG_INFO("block size\t\t= %d", hp.block_size);
-        YAMI_LOG_INFO("KV cache size\t= %ld MB", (usize) YAMI_B_TO_MB(kv_ne * 2 * hp.n_layers * sizeof(f32)));
+        YAMI_LOG_INFO("layers\t\t= %d", hparams.n_layers);
+        YAMI_LOG_INFO("attention heads\t= %d", hparams.n_heads);
+        YAMI_LOG_INFO("embedding size\t= %d", hparams.emb_size);
+        YAMI_LOG_INFO("vocab size\t\t= %d", hparams.vocab_size);
+        YAMI_LOG_INFO("block size\t\t= %d", hparams.block_size);
+        YAMI_LOG_INFO("KV cache size\t= %ld MB", (usize) YAMI_B_TO_MB(kv_ne * 2 * hparams.n_layers * sizeof(f32)));
         yami_mem_usage(ctx);
         metrics.model_memory = yami_used_mem(ctx);
         printf("============================================================================\n");
@@ -94,6 +99,7 @@ struct gpt2_model {
 
     yami_context *ctx;
     std::unique_ptr<yami_bpe_tokenizer> tokenizer;
+    std::unique_ptr<yami_mmap> mmap;
 
     yami_tensor *wpe;
     yami_tensor *wte;
@@ -110,7 +116,7 @@ struct gpt2_model {
 };
 
 int main(int argc, char **argv) {
-    yami_model_settings settings{};
+    yami_model_settings settings {};
     yami_arg_parse(argc, argv, &settings);
 
     yami_context *ctx = yami_init(yami_context_init_params{
@@ -124,7 +130,7 @@ int main(int argc, char **argv) {
     fflush(stdout);
 
     const f64 start_time = yami_timer();
-    std::vector<int> generated(gpt2.tokenizer->encode(settings.prompt));
+    std::vector<int> generated{gpt2.tokenizer->encode(settings.prompt)};
     gpt2.metrics.prompt_tokens = generated.size();
 
     gpt2.metrics.encode = yami_timer() - start_time;
@@ -258,7 +264,7 @@ int main(int argc, char **argv) {
         const f64 sampling_start = yami_timer();
 
         int next_tok;
-        if (settings.temperature == 0.f) {
+        if (std::fpclassify(settings.temperature) == FP_ZERO) {
             // Always take the most likely token
             const yami_token next = yami_top_k(logits->data, vocab_size)[0];
             next_tok = next.idx;
@@ -271,7 +277,7 @@ int main(int argc, char **argv) {
             }
             yami_softmax(scratch_ctx, logits);
 
-            std::discrete_distribution<> dist(logits->data, logits->data + logits->ne);
+            std::discrete_distribution<> dist{logits->data, logits->data + logits->ne};
 
             next_tok = dist(gpt2.rng);
         }

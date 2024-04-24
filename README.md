@@ -1,8 +1,8 @@
 # YAMI
 Yet Another Machine Inference framework
 
-## TODO
-**YAMI2:**
+## Open topics
+**Core:**
 - ~~matmul up to 4 dim~~
 - ~~add, addv, mul, mulv, div, divv~~
 - ~~view (reshape)~~
@@ -12,21 +12,25 @@ Yet Another Machine Inference framework
 - ~~softmax~~
 - ~~GELU~~
 - ~~GPT-2~~
-- ~~In-place operations~~
+- ~~RMSNorm~~
+- >RoPE
+- ~~SwiGLU~~
 - >Optimizations to reach GGML level
 - Tensor allocator with support for "temporary" allocations
 - CUDA support
-- LLaMA 2
+- >LLaMA 2
+
 
 
 **Extra:**
 - ~~BPE (C++)~~
+- ~~LLaMA tokenizer (C++)~~
 
 ## GPT2
 ### Benchmarks:
 - Pytorch, on my machine, takes something like 75-80 ms to generate a single token
 using multiple threads.
-- GGML takes something around 30 ms to generate a single token without doing anything extra fancy, this is very good
+- GGML takes something around 35-40 ms to generate a single token without doing anything extra fancy, this is very good
 and also means we can do much better
 - Vanilla NumPy takes something around 120-200 ms to generate a single token
 
@@ -34,5 +38,6 @@ and also means we can do much better
 - There are a couple of things that can be added to `yami_internal_matmul_blocked` to, hopefully,
 speed up the calculations (more care when packing B and better testing with block factor).
 Also, start experimenting with **SIMD** instead of relying solely on the compiler.
-- Thorough profiling using `perf` to check where we are is the bottleneck (check for branch miss-prediction, TLB misses,
-cache misses ecc...)
+- Thorough profiling using `perf`
+
+## LLaMA 2

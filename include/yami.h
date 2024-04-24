@@ -24,10 +24,24 @@
         } \
     } while(0)
 
-#ifdef YAMI_DEBUG
+#if defined(YAMI_DEBUG)
 #   define YAMI_LOG_DEBUG(format, ...)  YAMI_LOG_INFO(format, ##__VA_ARGS__)
 #else
 #   define YAMI_LOG_DEBUG(format, ...)  ((void) 0)
+#endif
+
+#if defined(__GNUC__)
+// A 'strictly pure' function is a function whose return value doesn't depend on the global state of the program,
+// this means that it must not access global variables subject to change or access parameters passed by pointer
+// unless the actual value of the pointer does not change after the first invocation.
+// A 'pure' function is basically the same thing without the restriction on global state change, this means
+// that a 'pure' function can take in and read the value of parameters passed by pointer even if that value
+// changes between subsequent invocations.
+#   define YAMI_STRICTLY_PURE   __attribute_const__
+#   define YAMI_PURE            __attribute_pure__
+#else
+#   define YAMI_STRICTLY_PURE
+#   define YAMI_PURE
 #endif
 
 #define YAMI_MAX(x, y)  ((x) > (y) ? (x) : (y))
@@ -39,10 +53,9 @@
 #define YAMI_LABEL_SIZE ((int) 64)
 #define YAMI_MINUS_INF  (-std::numeric_limits<f32>::infinity())
 
-#ifdef __cplusplus
+#if defined(__cplusplus)
 extern "C" {
 #endif
-
     using i8 = int8_t;
     using i16 = int16_t;
     using i32 = int32_t;
@@ -102,7 +115,7 @@ extern "C" {
 
     // ================================= Misc =================================
     extern yami_context *yami_ctx_scratch(yami_context *ctx) noexcept;
-    extern usize yami_used_mem(const yami_context *ctx) noexcept;
+    extern YAMI_PURE usize yami_used_mem(const yami_context *ctx) noexcept;
     extern void yami_mem_usage(const yami_context *ctx) noexcept;
     // ========================================================================
 
@@ -165,6 +178,11 @@ extern "C" {
                                    const yami_tensor *x,
                                    const int *indexes,
                                    usize n) noexcept;
+    extern yami_tensor *yami_rope(yami_context *,
+                                  yami_tensor *x,
+                                  usize n,
+                                  bool k_mode,
+                                  usize start_idx = 0) noexcept;
     extern yami_tensor *yami_split(yami_context *ctx,
                                    const yami_tensor *x,
                                    usize n,
@@ -173,6 +191,7 @@ extern "C" {
     // Concatenate xa with xb, both xa and xb must have the same shape except for the dimension along which
     // the concat will happen.
     // Note: xa and xb are assumed to be contiguous.
+    // Todo: have the possibility to append to the first tensor, this way copy is not needed
     extern yami_tensor *yami_concat(yami_context *ctx,
                                     const yami_tensor *xa,
                                     const yami_tensor *xb,
@@ -227,9 +246,12 @@ extern "C" {
     extern yami_tensor *yami_gelu(yami_context *ctx,
                                   yami_tensor *x,
                                   bool in_place = true) noexcept;
+    extern yami_tensor *yami_swiglu(yami_context *ctx,
+                                    yami_tensor *x,
+                                    bool in_place = true) noexcept;
     extern yami_tensor *yami_sum(yami_context *ctx,
-                                 const yami_tensor *x,
-                                 int dim) noexcept;
+                                     const yami_tensor *x,
+                                     int dim) noexcept;
     extern yami_tensor *yami_mean(yami_context *ctx,
                                   const yami_tensor *x,
                                   int dim) noexcept;
@@ -242,6 +264,9 @@ extern "C" {
     extern yami_tensor *yami_sqrt(yami_context *ctx,
                                   yami_tensor *x,
                                   bool in_place = true) noexcept;
+    extern yami_tensor *yami_rsqrt(yami_context *ctx,
+                                   yami_tensor *x,
+                                   bool in_place = true) noexcept;
     extern yami_tensor *yami_square(yami_context *ctx,
                                     yami_tensor *x,
                                     bool in_place = true) noexcept;
@@ -257,8 +282,13 @@ extern "C" {
                                         yami_tensor *x,
                                         bool in_place = true,
                                         f32 eps = 1e-5f) noexcept;
+    extern yami_tensor *yami_rms_norm(yami_context *ctx,
+                                      const yami_tensor *w,
+                                      yami_tensor *x,
+                                      bool in_place = true,
+                                      f32 eps = 1e-5f) noexcept;
     // ========================================================================
 
-#ifdef __cplusplus
+#if defined(__cplusplus)
 }
 #endif

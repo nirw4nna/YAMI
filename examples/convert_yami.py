@@ -41,12 +41,12 @@ import ctypes
 #   - hparams
 #   - number of tensors (2 bytes)
 #   - foreach tensor:
-#       -- label size (2 bytes)
-#       -- label (size bytes, ASCII)
+#       -- label (64 bytes, ASCII)
 #       -- encoding (1 byte: 0=fp32)
 #       -- number of dimensions (1 byte)
 #       -- dimensions (8 bytes per dimension, always 4 dimensions)
-#       -- data size (8 bytes)
+#       -- data offset wrt. the beginning of this file (8 bytes)
+#   - foreach tensor:
 #       -- data (size bytes in row-major order, encoded as specified)
 
 TOKENIZER_HEAD = b'\x59\x41\x4D\x49\x54'
@@ -62,7 +62,7 @@ _TYPE_MAP = {
 # Base class for the hparams of all the model, used for export
 @dataclass
 class Hparams(abc.ABC):
-
+    
     @classmethod
     def to_raw(cls) -> bytearray:
         struct_fields = [(field.name, _TYPE_MAP[field.type]) for field in fields(cls)]
@@ -86,13 +86,15 @@ class Model(Enum):
     def __str__(self) -> str:
         return f'{self.name}'
 
+def _map_location(storage, location):
+    return storage
 
 def load_from_meta(checkpoint_folder: str):
     with open(os.path.join(checkpoint_folder, 'params.json')) as f:
         params = json.load(f)
     
     checkpoint_path = list(Path(checkpoint_folder).glob('consolidated.*.pth'))[0]
-    return torch.load(checkpoint_path, map_location='cpu'), params
+    return torch.load(checkpoint_path, map_location=_map_location), params
     
 
 def _export_bpe(encoder, vocab, file_handle):
@@ -133,7 +135,7 @@ def _export_sp(in_model, file_handle):
 
 
 def export_tokenizer(out_file: str, type: Tokenizer,
-                     in_model: str=None, encoder=None,
+                     in_model: str = None, encoder=None,
                      vocab=None):
     print(f'Exporting {type} tokenizer to "{out_file}"')
 
@@ -148,30 +150,6 @@ def export_tokenizer(out_file: str, type: Tokenizer,
             _export_bpe(encoder=encoder, vocab=vocab, file_handle=f)   
 
 
-def _encode_tensor(label, tensor, file_handle):
-    file_handle.write(struct.pack('<H', len(label)+1))
-    file_handle.write(bytes(label, encoding='ascii') + b'\x00')
-
-    if not tensor.dtype == torch.float32:
-        tensor = tensor.to(torch.float32)
-
-    # data type
-    file_handle.write(b'\x00')
-
-    if len(tensor.shape) > 4:
-        raise Exception('Tensors can have up to 4 dimensions')
-    
-    file_handle.write(struct.pack('<B', len(tensor.shape)))
-    for i in range(4):
-        file_handle.write(struct.pack('<q', tensor.shape[i] if i < len(tensor.shape) else 0))
-
-
-    data = tensor.reshape(-1).numpy(force=True)
-    file_handle.write(struct.pack('<Q', len(data)))
-    
-    data.tofile(file_handle)
-
-
 def export_model(out_file: str, model: Model, model_dict, hparams: Hparams, to_transpose=None):
     print(f'Exporting {model} model with {len(model_dict)} tensors to "{out_file}"')
     
@@ -184,13 +162,46 @@ def export_model(out_file: str, model: Model, model_dict, hparams: Hparams, to_t
         f.write(raw_hparams)
 
         # number of tensors
-        f.write(struct.pack('<H', len(model_dict))) 
-
+        f.write(struct.pack('<H', len(model_dict)))
+        # 106 is the tensor metadata size
+        offset = len(MODEL_HEAD) + 6 + len(raw_hparams) + len(model_dict) * 106
         for label in model_dict:
-            t = model_dict[label]
-            print(f'Found new tensor: [ {label} {t.shape} {t.dtype} ]')
+            tensor = model_dict[label]
+            print(f'Found new tensor: [ {label} {tensor.shape} {tensor.dtype} ]')
             if to_transpose and any([label.endswith(tt) for tt in to_transpose]):
                 print(f'Tensor {label} will be transposed')
-                t = t.t()
+                tensor = tensor.t()
 
-            _encode_tensor(label, t, f)
+            model_dict[label] = tensor
+
+            # Write all the tensors metadata
+            label_len = len(label)
+            if label_len >= 64:
+                raise Exception(f'Label {label} is too long')
+
+            f.write(bytes(label, encoding='ascii') + (b'\x00' * (64 - label_len)))
+
+            if not tensor.dtype == torch.float32:
+                tensor = tensor.to(torch.float32)
+
+            # data type
+            f.write(b'\x00')
+
+            if len(tensor.shape) > 4:
+                raise Exception('Tensors can have up to 4 dimensions')
+            
+            f.write(struct.pack('<B', len(tensor.shape)))
+            for i in range(4):
+                f.write(struct.pack('<Q', tensor.shape[i] if i < len(tensor.shape) else 0))
+
+            data = tensor.reshape(-1).numpy(force=True)
+            f.write(struct.pack('<Q', offset))
+            # Assuming fp32
+            offset += len(data) * 4
+
+        for label in model_dict:
+            tensor = model_dict[label]
+            print(f'Writing {label} data...')
+            data = tensor.to(torch.float32).reshape(-1).numpy(force=True)
+            data.tofile(f)
+

@@ -22,7 +22,7 @@ from ctypes import (
 
 _lib_file = f'{os.path.dirname(os.path.dirname(__file__))}/yami.so'
 if not os.path.exists(_lib_file):
-    raise RuntimeError(f'Error loading YAMI shared object "${_lib_file}"')
+    raise RuntimeError(f'Error loading YAMI shared object "{_lib_file}"')
 
 _lib = ctypes.CDLL(_lib_file)
 
@@ -284,6 +284,14 @@ _lib.yami_gelu.argtypes = [yami_context_p, yami_tensor_p, c_bool]
 _lib.yami_gelu.restype = yami_tensor_p
 
 
+def yami_swiglu(ctx: YamiContext, x: YamiTensor, in_place: bool = True) -> YamiTensor:
+    return YamiTensor(_lib.yami_swiglu(ctx, x, in_place))
+
+
+_lib.yami_swiglu.argtypes = [yami_context_p, yami_tensor_p, c_bool]
+_lib.yami_swiglu.restype = yami_tensor_p
+
+
 def yami_softmax(ctx: YamiContext, x: YamiTensor, dim: int) -> YamiTensor:
     return YamiTensor(_lib.yami_softmax(ctx, x, dim))
 
@@ -356,3 +364,13 @@ def yami_layer_norm(ctx: YamiContext, w: YamiTensor, b: YamiTensor, x: YamiTenso
 _lib.yami_layer_norm.argtypes = [yami_context_p, yami_tensor_p, yami_tensor_p,
                                  yami_tensor_p, c_bool, c_float]
 _lib.yami_layer_norm.restype = yami_tensor_p
+
+
+def yami_rms_norm(ctx: YamiContext, w: YamiTensor, x: YamiTensor,
+                  in_place: bool = True, eps: float = float('1e-5')) -> YamiTensor:
+    return YamiTensor(_lib.yami_rms_norm(ctx, w, x, in_place, eps))
+
+
+_lib.yami_rms_norm.argtypes = [yami_context_p, yami_tensor_p, yami_tensor_p,
+                               c_bool, c_float]
+_lib.yami_rms_norm.restype = yami_tensor_p

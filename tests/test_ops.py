@@ -102,6 +102,7 @@ class TestOps:
             "yami_sqrt": "sqrt",
             "yami_square": "square",
             "yami_gelu": "",
+            "yami_swiglu": "",
             "yami_lt_mask": "",
         }
         for yami_name, np_name in ops_to_test.items():
@@ -113,6 +114,8 @@ class TestOps:
 
                 if yami_name == 'yami_gelu':
                     target_res = F.gelu(torch.tensor(target_a), approximate='tanh').numpy()
+                elif yami_name == 'yami_swiglu':
+                    target_res = F.silu(torch.tensor(target_a)).numpy()
                 elif yami_name == 'yami_lt_mask':
                     a_pt = torch.tensor(target_a)
                     target_res = a_pt.masked_fill(torch.tril(a_pt) == 0, float('-inf')).numpy()
@@ -190,21 +193,28 @@ class TestOps:
                     assert _all_close(my_res.as_np(), target_res)
                     ctx.clear()
 
-    def test_layer_norm(self, ctx: YamiContext):
-        x = torch.randn((5, 10))
-        w = torch.ones(10)
-        b = torch.zeros(10)
+    def test_norm(self, ctx: YamiContext):
+        op_to_test = ['yami_layer_norm', 'yami_rms_norm']
+        for op_name in op_to_test:
+            x = torch.randn((5, 10))
+            w = torch.ones(10)
+            my_x = YamiTensor.from_np(ctx, "my_x", x.numpy())
+            my_w = YamiTensor.from_np(ctx, "my_w", w.numpy())
+            yami_op = getattr(pyyami, op_name)
+            if op_name == 'yami_layer_norm':
+                b = torch.zeros(10)
+                my_b = YamiTensor.from_np(ctx, "my_b", b.numpy())
+                my_res = yami_op(ctx, my_w, my_b, my_x)
+                my_res_np = my_res.as_np()
+                for i in range(x.shape[0]):
+                    assert (np.isclose(my_res_np[i, :].mean(), 0, atol=1e-5, rtol=1e-5) and
+                            np.isclose(my_res_np[i, :].std(), 1, atol=1e-5, rtol=1e-5))
+            elif op_name == 'yami_rms_norm':
+                res = (x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-5)) * w
+                my_res = yami_op(ctx, my_w, my_x)
+                assert _all_close(my_res.as_np(), res)
 
-        my_x = YamiTensor.from_np(ctx, "x", x.numpy())
-        my_w = YamiTensor.from_np(ctx, "w", w.numpy())
-        my_b = YamiTensor.from_np(ctx, "b", b.numpy())
-
-        my_res = yami_layer_norm(ctx, my_w, my_b, my_x)
-        my_res_np = my_res.as_np()
-
-        for i in range(x.shape[0]):
-            assert (np.isclose(my_res_np[i, :].mean(), 0, atol=1e-5, rtol=1e-5) and
-                    np.isclose(my_res_np[i, :].std(), 1, atol=1e-5, rtol=1e-5))
+            ctx.clear()
 
     def test_split(self, ctx: YamiContext):
         a = torch.randn((3, 9, 15, 2000))
@@ -220,19 +230,3 @@ class TestOps:
                 assert _all_close(my_res.as_np(), targets[j].numpy())
 
             ctx.clear()
-
-
-def test_matmul():
-    ctx = YamiContext(1024 * 1024 * 1024, 12)
-
-    a = _random_ndarray(700, 5000)
-    b = _random_ndarray(5000, 700)
-
-    res = np.matmul(a, b)
-
-    my_a = YamiTensor.from_np(ctx, "my_a", a)
-    my_b = YamiTensor.from_np(ctx, "my_b", b)
-
-    my_res = yami_matmul(ctx, my_a, my_b)
-
-    assert _all_close(my_res.as_np(), res)
