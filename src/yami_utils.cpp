@@ -9,7 +9,7 @@
 #define YAMI_HEADER_SIZE    ((usize) 6) // header + version number
 #define YAMI_VERSION        ((u8) 1)
 
-#define read(DST, siz, n, F) YAMI_ASSERT(fread(DST, siz, n, F) == n)
+#define read(DST, siz, n, F) YAMI_ASSERT(fread(DST, siz, n, F) == (n))
 
 constexpr static u8 yami_tokenizer_header[YAMI_HEADER_SIZE] = {0x59, 0x41, 0x4D, 0x49, 0x54, YAMI_VERSION};
 constexpr static u8 yami_model_header[YAMI_HEADER_SIZE] = {0x59, 0x41, 0x4D, 0x49, 0x4D, YAMI_VERSION};
@@ -605,7 +605,7 @@ void yami_load_model(yami_context *ctx, yami_model *model,
                                      (int) metadata.n_dims,
                                      metadata.dimensions,
                                      metadata.label,
-                                     (u8 *) model->mmap->data + metadata.offset);
+                                     (byte *) model->mmap->data + metadata.offset);
         } else {
             tensor = yami_new_tensor(ctx,
                                      (int) metadata.n_dims,

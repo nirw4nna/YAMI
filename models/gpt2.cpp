@@ -172,11 +172,11 @@ int main(int argc, char **argv) {
             );
 
             yami_tensor *q = yami_reshape(yami_split(scratch_ctx, cur, gpt2.hparams.emb_size, 0), 4,
-                                          1, x->dimensions[0], n_heads, head_size);
+                                          1, x->dim[yami_tensor_dim(x, 0)], n_heads, head_size);
             yami_tensor *k_cur = yami_reshape(yami_split(scratch_ctx, cur, gpt2.hparams.emb_size, 1), 4,
-                                              1, x->dimensions[0], n_heads, head_size);
+                                              1, x->dim[yami_tensor_dim(x, 0)], n_heads, head_size);
             yami_tensor *v_cur = yami_reshape(yami_split(scratch_ctx, cur, gpt2.hparams.emb_size, 2), 4,
-                                              1, x->dimensions[0], n_heads, head_size);
+                                              1, x->dim[yami_tensor_dim(x, 0)], n_heads, head_size);
 
             yami_tensor *q_t = yami_contiguous(scratch_ctx,
                                                yami_transpose(scratch_ctx, q, 1, 2)
@@ -258,7 +258,7 @@ int main(int argc, char **argv) {
         const u32 vocab_size = gpt2.hparams.vocab_size;
 
         // Select the last row of logits
-        logits = yami_view_1d(scratch_ctx, logits, vocab_size, (logits->dimensions[0] - 1) * vocab_size);
+        logits = yami_view_1d(scratch_ctx, logits, vocab_size, (logits->dim[yami_tensor_dim(logits, 0)] - 1) * vocab_size);
         gpt2.metrics.generation += (yami_timer() - gen_start);
 
         const f64 sampling_start = yami_timer();

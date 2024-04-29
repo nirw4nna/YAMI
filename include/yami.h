@@ -39,9 +39,11 @@
 // changes between subsequent invocations.
 #   define YAMI_STRICTLY_PURE   __attribute_const__
 #   define YAMI_PURE            __attribute_pure__
+#   define YAMI_INLINE          inline __attribute__((always_inline))
 #else
 #   define YAMI_STRICTLY_PURE
 #   define YAMI_PURE
+#   define YAMI_INLINE
 #endif
 
 #define YAMI_MAX(x, y)  ((x) > (y) ? (x) : (y))
@@ -52,6 +54,12 @@
 #define YAMI_MAX_DIMS   ((int) 4)
 #define YAMI_LABEL_SIZE ((int) 64)
 #define YAMI_MINUS_INF  (-std::numeric_limits<f32>::infinity())
+
+// Get the index of dimension 'dim' of tensor 'PTR'.
+// dim is usize[YAMI_MAX_DIMS] = [1 x x x] so the actual first valid index is always at YAMI_MAX_DIMS - n_dim while the last
+// dimension index is always at YAMI_MAX_DIMS - 1.
+#define yami_tensor_dim(PTR, dim) (((dim) < 0) ? (YAMI_MAX_DIMS + (dim)) : (YAMI_MAX_DIMS - (PTR)->n_dim + (dim)))
+
 
 #if defined(__cplusplus)
 extern "C" {
@@ -81,18 +89,15 @@ extern "C" {
 
     struct yami_tensor {
         usize ne;
-        // The shape of this tensor.
-        usize dimensions[YAMI_MAX_DIMS];
-        // The shape of this tensor in its complete form, for example a 1D tensor T of 4 elements
-        // will have T.dimensions = [4, 0, 0, 0] and T.extended_dim = [1, 1, 1, 4].
-        // This information is used when broadcasting the tensor.
-        usize extended_dim[YAMI_MAX_DIMS];
+        // The shape of this tensor, right-aligned. For example a 1D tensor T of 4 elements
+        // will have dim = [1, 1, 1, 4].
+        usize dim[YAMI_MAX_DIMS];
         // Stride for a given dimension expressed in number of f32.
-        // For example: given a tensor T with dimensions [2, 3, 2, 2] T.stride[3] = 1, T.stride[1] = 2*2
         usize stride[YAMI_MAX_DIMS];
         char label[YAMI_LABEL_SIZE];
         f32 *data;
         int n_dim;
+        bool contiguous;
     };
 
     enum yami_mask_flag : u8 {
@@ -101,7 +106,7 @@ extern "C" {
         GREATER,
     };
 
-    static inline f64 yami_timer() noexcept {
+    static YAMI_INLINE f64 yami_timer() noexcept {
         timespec ts{};
         clock_gettime(CLOCK_MONOTONIC, &ts);
         return (f64) ts.tv_sec + (f64) ts.tv_nsec * 1.e-9;
@@ -111,7 +116,6 @@ extern "C" {
     extern yami_context *yami_init(yami_context_init_params params) noexcept;
     extern void yami_free(yami_context *ctx) noexcept;
     extern void yami_clear_ctx(yami_context *ctx) noexcept;
-    // ========================================================================
 
     // ================================= Misc =================================
     extern yami_context *yami_ctx_scratch(yami_context *ctx) noexcept;
@@ -121,7 +125,7 @@ extern "C" {
 
     // ========================== Tensor Manipulation =========================
     extern yami_tensor *yami_new_tensor(yami_context *ctx, int n_dim,
-                                        const usize *dimensions,
+                                        const usize *dim,
                                         const char *label = "",
                                         void *data = nullptr) noexcept;
     extern yami_tensor *yami_tensor_1d(yami_context *ctx, const char *label,
@@ -134,6 +138,7 @@ extern "C" {
     extern yami_tensor *yami_tensor_4d(yami_context *ctx, const char *label,
                                        usize dim1, usize dim2,
                                        usize dim3, usize dim4) noexcept;
+    // View requires the tensor to be contiguous in memory
     extern yami_tensor *yami_view_1d(yami_context *ctx, yami_tensor *x,
                                      usize dim1, usize offset = 0) noexcept;
     extern yami_tensor *yami_view_2d(yami_context *ctx, yami_tensor *x,
@@ -200,9 +205,6 @@ extern "C" {
     // Currently, there are no checks in place to verify whether the underlying
     // buffer of res is big enough for x. Also, after this call all the information
     // regarding the original size and shape of res will be lost.
-    // Fixme: we need to add an object that describes the "backend" of a tensor,
-    //  there we could store information such as the actual size of the underlying buffer
-    //  as well as where it's actually stored (RAM, GPU, ...)
     extern void yami_copy(const yami_tensor *x,
                           yami_tensor *res) noexcept;
     // ========================================================================

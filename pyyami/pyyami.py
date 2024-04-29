@@ -45,12 +45,12 @@ class yami_context_init_params(Structure):
 class yami_tensor(Structure):
     _fields_ = [
         ('ne', c_size_t),
-        ('dimensions', c_size_t * YAMI_MAX_DIMS),
-        ('extended_dim', c_size_t * YAMI_MAX_DIMS),
+        ('dim', c_size_t * YAMI_MAX_DIMS),
         ('stride', c_size_t * YAMI_MAX_DIMS),
         ('label', c_char * YAMI_MAX_LABEL),
         ('data', c_float_p),
         ('n_dim', c_int),
+        ('contiguous', c_bool),
     ]
 
 
@@ -147,7 +147,7 @@ class YamiTensor:
         t = self._tensor_p.contents
         dim_arr = []
         for i in range(t.n_dim):
-            dim_arr.append(t.dimensions[i])
+            dim_arr.append(t.dim[YAMI_MAX_DIMS - t.n_dim + i])
 
         return np.ctypeslib.as_array(t.data, shape=tuple(dim_arr))
 
