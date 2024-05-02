@@ -36,7 +36,7 @@ struct transformer_block {
 };
 
 struct gpt2_model {
-    gpt2_model(yami_context *context, const yami_model_settings *settings) : ctx(context) {
+    gpt2_model(yami_ctx *context, const yami_model_settings *settings) : ctx(context) {
         yami_model ym{};
         ym.hparams = &hparams;
         const f64 load_start = yami_timer();
@@ -95,9 +95,12 @@ struct gpt2_model {
         yami_mem_usage(ctx);
         metrics.model_memory = yami_used_mem(ctx);
         printf("============================================================================\n");
+
+        // After loading the model data set the default yami scope to 'local'
+        yami_set_scope(ctx, yami_scope::LOCAL);
     }
 
-    yami_context *ctx;
+    yami_ctx *ctx;
     std::unique_ptr<yami_bpe_tokenizer> tokenizer;
     std::unique_ptr<yami_mmap> mmap;
 
@@ -119,7 +122,7 @@ int main(int argc, char **argv) {
     yami_model_settings settings {};
     yami_arg_parse(argc, argv, &settings);
 
-    yami_context *ctx = yami_init(yami_context_init_params{
+    yami_ctx *ctx = yami_init(yami_init_params{
             settings.n_workers,
             settings.main_ctx_size,
             settings.scratch_ctx_size
@@ -132,10 +135,8 @@ int main(int argc, char **argv) {
     const f64 start_time = yami_timer();
     std::vector<int> generated{gpt2.tokenizer->encode(settings.prompt)};
     gpt2.metrics.prompt_tokens = generated.size();
-
+    // TODO: add prompt eval time to the metrics
     gpt2.metrics.encode = yami_timer() - start_time;
-
-    yami_context *scratch_ctx = yami_ctx_scratch(gpt2.ctx);
 
     std::vector<int> pos;
 
@@ -145,7 +146,7 @@ int main(int argc, char **argv) {
 
     usize ctx_size = 0;
     for (int i = 0; i < settings.n_tokens; ++i) {
-        yami_clear_ctx(scratch_ctx);
+        yami_clear_ctx(ctx);
 
         YAMI_ASSERT(ctx_size < gpt2.hparams.block_size);
 
@@ -155,110 +156,109 @@ int main(int argc, char **argv) {
             pos[j] = ctx_size + j;
         }
 
-        yami_tensor *tok_emb = yami_embed(scratch_ctx, gpt2.wte, generated.data(), generated.size());
-        yami_tensor *pos_emb = yami_embed(scratch_ctx, gpt2.wpe, pos.data(), pos.size());
+        yami_tensor *tok_emb = yami_embed(ctx, gpt2.wte, generated.data(), generated.size());
+        yami_tensor *pos_emb = yami_embed(ctx, gpt2.wpe, pos.data(), pos.size());
 
-        yami_tensor *x = yami_add(scratch_ctx, tok_emb, pos_emb, true);
+        yami_tensor *x = yami_add(ctx, tok_emb, pos_emb, true);
 
         yami_tensor *cur;
 
         for (const auto &block : gpt2.h) {
-            cur = yami_layer_norm(scratch_ctx, block.ln_1_w, block.ln_1_b, x, false);
+            cur = yami_layer_norm(ctx, block.ln_1_w, block.ln_1_b, x);
 
-            cur = yami_add(scratch_ctx,
-                           yami_matmul(scratch_ctx, cur, block.c_attn_w),
+            cur = yami_add(ctx,
+                           yami_matmul(ctx, cur, block.c_attn_w),
                            block.c_attn_b,
                            true
             );
 
-            yami_tensor *q = yami_reshape(yami_split(scratch_ctx, cur, gpt2.hparams.emb_size, 0), 4,
+            yami_tensor *q = yami_reshape(yami_split(ctx, cur, gpt2.hparams.emb_size, 0), 4,
                                           1, x->dim[yami_tensor_dim(x, 0)], n_heads, head_size);
-            yami_tensor *k_cur = yami_reshape(yami_split(scratch_ctx, cur, gpt2.hparams.emb_size, 1), 4,
+            yami_tensor *k_cur = yami_reshape(yami_split(ctx, cur, gpt2.hparams.emb_size, 1), 4,
                                               1, x->dim[yami_tensor_dim(x, 0)], n_heads, head_size);
-            yami_tensor *v_cur = yami_reshape(yami_split(scratch_ctx, cur, gpt2.hparams.emb_size, 2), 4,
+            yami_tensor *v_cur = yami_reshape(yami_split(ctx, cur, gpt2.hparams.emb_size, 2), 4,
                                               1, x->dim[yami_tensor_dim(x, 0)], n_heads, head_size);
 
-            yami_tensor *q_t = yami_contiguous(scratch_ctx,
-                                               yami_transpose(scratch_ctx, q, 1, 2)
+            yami_tensor *q_t = yami_contiguous(ctx,
+                                               yami_transpose(ctx, q, 1, 2)
             );
             // [B, nh, T, hs]
-            yami_tensor *k_cur_t = yami_contiguous(scratch_ctx,
-                                                 yami_transpose(scratch_ctx, k_cur, 1, 2)
+            yami_tensor *k_cur_t = yami_contiguous(ctx,
+                                                 yami_transpose(ctx, k_cur, 1, 2)
             );
-            yami_tensor *v_cur_t = yami_contiguous(scratch_ctx,
-                                               yami_transpose(scratch_ctx, v_cur, 1, 2)
+            yami_tensor *v_cur_t = yami_contiguous(ctx,
+                                               yami_transpose(ctx, v_cur, 1, 2)
             );
 
             // KV cache
-            yami_tensor *k_old = yami_view_4d(scratch_ctx, block.k_cache, 1, n_heads, ctx_size, head_size);
-            yami_tensor *k = yami_concat(scratch_ctx, k_old, k_cur_t, 2);
+            yami_tensor *k_old = yami_view_4d(ctx, block.k_cache, 1, n_heads, ctx_size, head_size);
+            yami_tensor *k = yami_concat(ctx, k_old, k_cur_t, 2);
 
             yami_copy(k, block.k_cache);
 
-            yami_tensor *k_t = yami_contiguous(scratch_ctx,
-                                               yami_transpose(scratch_ctx, k, -2, -1)
+            yami_tensor *k_t = yami_contiguous(ctx,
+                                               yami_transpose(ctx, k, -2, -1)
             );
 
-            yami_tensor *v_old = yami_view_4d(scratch_ctx, block.v_cache, 1, n_heads, ctx_size, head_size);
-            yami_tensor *v_t = yami_concat(scratch_ctx, v_old, v_cur_t, 2);
+            yami_tensor *v_old = yami_view_4d(ctx, block.v_cache, 1, n_heads, ctx_size, head_size);
+            yami_tensor *v_t = yami_concat(ctx, v_old, v_cur_t, 2);
             yami_copy(v_t, block.v_cache);
 
+            cur = yami_matmul(ctx, q_t, k_t);
 
-            cur = yami_matmul(scratch_ctx, q_t, k_t);
+            yami_mulc(ctx, cur, att_scale);
 
-            yami_mulc(scratch_ctx, cur, att_scale);
+            yami_lt_mask(ctx, cur, YAMI_MINUS_INF, ctx_size);
 
-            yami_lt_mask(scratch_ctx, cur, YAMI_MINUS_INF, ctx_size);
+            yami_softmax(ctx, cur);
 
-            yami_softmax(scratch_ctx, cur);
+            yami_tensor *out = yami_matmul(ctx, cur, v_t);
 
-            yami_tensor *out = yami_matmul(scratch_ctx, cur, v_t);
-
-            out = yami_contiguous(scratch_ctx,
-                                  yami_transpose(scratch_ctx, out, 1, 2)
+            out = yami_contiguous(ctx,
+                                  yami_transpose(ctx, out, 1, 2)
             );
 
             yami_reshape(out, 2, generated.size(), gpt2.hparams.emb_size);
 
             yami_tensor *out_proj = yami_add(
-                    scratch_ctx,
-                    yami_matmul(scratch_ctx, out, block.c_attn_proj_w),
+                    ctx,
+                    yami_matmul(ctx, out, block.c_attn_proj_w),
                     block.c_attn_proj_b,
                     true
             );
 
             // x = x + self.attn(self.ln_1(x))
-            yami_add(scratch_ctx, x, out_proj, true);
+            yami_add(ctx, x, out_proj, true);
 
             // x = x + m.c_proj(m.act(m.c_fc(self.ln_2(x))))
-            cur = yami_layer_norm(scratch_ctx, block.ln_2_w, block.ln_2_b, x, false);
+            cur = yami_layer_norm(ctx, block.ln_2_w, block.ln_2_b, x);
 
-            cur = yami_add(scratch_ctx,
-                           yami_matmul(scratch_ctx, cur, block.c_fc_w),
+            cur = yami_add(ctx,
+                           yami_matmul(ctx, cur, block.c_fc_w),
                            block.c_fc_b,
                            true
             );
 
-            yami_gelu(scratch_ctx, cur);
+            yami_gelu(ctx, cur);
 
-            x = yami_add(scratch_ctx,
+            x = yami_add(ctx,
                          x,
                          yami_add(
-                                 scratch_ctx,
-                                 yami_matmul(scratch_ctx, cur, block.c_proj_w),
+                                 ctx,
+                                 yami_matmul(ctx, cur, block.c_proj_w),
                                  block.c_proj_b,
                                  true
                          ),
                          true
             );
         }
-        yami_layer_norm(scratch_ctx, gpt2.ln_f_w, gpt2.ln_f_b, x);
+        x = yami_layer_norm(ctx, gpt2.ln_f_w, gpt2.ln_f_b, x);
 
-        yami_tensor *logits = yami_matmul(scratch_ctx, x, gpt2.lm_head_w);
+        yami_tensor *logits = yami_matmul(ctx, x, gpt2.lm_head_w);
         const u32 vocab_size = gpt2.hparams.vocab_size;
 
         // Select the last row of logits
-        logits = yami_view_1d(scratch_ctx, logits, vocab_size, (logits->dim[yami_tensor_dim(logits, 0)] - 1) * vocab_size);
+        logits = yami_view_1d(ctx, logits, vocab_size, (logits->dim[yami_tensor_dim(logits, 0)] - 1) * vocab_size);
         gpt2.metrics.generation += (yami_timer() - gen_start);
 
         const f64 sampling_start = yami_timer();
@@ -269,13 +269,13 @@ int main(int argc, char **argv) {
             const yami_token next = yami_top_k(logits->data, vocab_size)[0];
             next_tok = next.idx;
         } else {
-            yami_divc(scratch_ctx, logits, settings.temperature, true);
+            yami_divc(ctx, logits, settings.temperature, true);
             if (settings.top_k != 0) {
                 // If top_k is set crop the logits to the top k most likely ones
                 const f32 smallest_of_the_k = yami_top_k(logits->data, vocab_size, settings.top_k).back().value;
-                yami_mask_if(scratch_ctx, logits, yami_mask_flag::LOWER, smallest_of_the_k, YAMI_MINUS_INF);
+                yami_mask_if(ctx, logits, yami_mask_flag::LOWER, smallest_of_the_k, YAMI_MINUS_INF);
             }
-            yami_softmax(scratch_ctx, logits);
+            yami_softmax(ctx, logits);
 
             std::discrete_distribution<> dist{logits->data, logits->data + logits->ne};
 
@@ -293,7 +293,7 @@ int main(int argc, char **argv) {
         generated.clear();
         generated.push_back(next_tok);
 
-        gpt2.metrics.inference_memory += yami_used_mem(scratch_ctx);
+        gpt2.metrics.inference_memory += yami_used_mem(ctx);
     }
     gpt2.metrics.total = yami_timer() - start_time;
 

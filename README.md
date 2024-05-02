@@ -35,12 +35,12 @@ At least until we get there, it doesn't make sense to waste time thinking about 
 a good reason to do so
 
 With this out of the way, let's try and fix some things in order to make this thing worth publishing:
-~~- Move to `u64` for sizes~~
+- ~~Move to `u64` for sizes~~
 - Verify the usefulness (profiling) of in-place operations, with `__restrict` and some vectorization we could probably
 gain significant performance boost
-~~- Remove the `extended_dim` abstraction, it's useless~~ 
+- ~~Remove the `extended_dim` abstraction, it's useless~~ 
 - Switch to a multiple arenas scheme where each arena has its own lifetime
-~~- Add a `contiguous` flag~~
+- ~~Add a `contiguous` flag~~
 - Use a decent GEMM, it's the main point of all this...
 - Remove `pthread`, use `OpenMP`
 - _`YAMI_MAX_DIMS` should be defined at compile-time (this is the trickiest of them all,

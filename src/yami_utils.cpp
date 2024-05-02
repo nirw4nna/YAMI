@@ -5,14 +5,15 @@
 #include <fcntl.h>
 #include <cstring>
 #include <fstream>
+#include <random>
 
 #define YAMI_HEADER_SIZE    ((usize) 6) // header + version number
 #define YAMI_VERSION        ((u8) 1)
 
 #define read(DST, siz, n, F) YAMI_ASSERT(fread(DST, siz, n, F) == (n))
 
-constexpr static u8 yami_tokenizer_header[YAMI_HEADER_SIZE] = {0x59, 0x41, 0x4D, 0x49, 0x54, YAMI_VERSION};
-constexpr static u8 yami_model_header[YAMI_HEADER_SIZE] = {0x59, 0x41, 0x4D, 0x49, 0x4D, YAMI_VERSION};
+constexpr static u8 YAMI_TOKENIZER_HEADER[YAMI_HEADER_SIZE] = {0x59, 0x41, 0x4D, 0x49, 0x54, YAMI_VERSION};
+constexpr static u8 YAMI_MODEL_HEADER[YAMI_HEADER_SIZE] = {0x59, 0x41, 0x4D, 0x49, 0x4D, YAMI_VERSION};
 
 
 static FILE *open_and_check(const char *yami_file, const u8 *header) noexcept {
@@ -31,7 +32,7 @@ static FILE *open_and_check(const char *yami_file, const u8 *header) noexcept {
 }
 
 yami_mmap::yami_mmap(const char *file) {
-    FILE *f = open_and_check(file, yami_model_header);
+    FILE *f = open_and_check(file, YAMI_MODEL_HEADER);
 
     fseek(f, 0, SEEK_END);
     file_size = ftell(f);
@@ -473,7 +474,7 @@ void yami_llama_tokenizer::maybe_add(const std::vector<yami_sp_symbol> &symbols,
 }
 
 static void load_tokenizer(yami_model *model, const char *tokenizer_file) noexcept {
-    FILE *f = open_and_check(tokenizer_file, yami_tokenizer_header);
+    FILE *f = open_and_check(tokenizer_file, YAMI_TOKENIZER_HEADER);
 
     yami_tokenizers type;
     read(&type, sizeof(yami_tokenizers), 1, f);
@@ -553,18 +554,14 @@ struct tensor_metadata {
     u64 offset;
 };
 
-void yami_load_model(yami_context *ctx, yami_model *model,
+void yami_load_model(yami_ctx *ctx, yami_model *model,
                      const char *model_file, const char *tokenizer_file,
                      const bool use_mmap) noexcept {
     load_tokenizer(model, tokenizer_file);
     if (use_mmap)
         model->mmap = std::make_unique<yami_mmap>(model_file);
 
-    FILE *f = fopen(model_file, "rb");
-    YAMI_ASSERT(f != nullptr);
-
-    // There is no need to check the header as it's already checked by mmap
-    fseek(f, YAMI_HEADER_SIZE, SEEK_SET);
+    FILE *f = open_and_check(model_file, YAMI_MODEL_HEADER);
 
     yami_models type;
     read(&type, sizeof(yami_models), 1, f);
@@ -653,7 +650,7 @@ void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexce
     settings->tokenizer_file = "yami_tokenizer.bin";
     settings->main_ctx_size = 1024*1024*1024L;
     settings->scratch_ctx_size = 1024*1024*1024L;
-    settings->seed = time(nullptr);
+    settings->seed = std::random_device()();
     settings->top_k = 0;
     settings->use_mmap = true;
 

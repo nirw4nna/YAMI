@@ -46,18 +46,28 @@
 #   define YAMI_INLINE
 #endif
 
-#define YAMI_MAX(x, y)  ((x) > (y) ? (x) : (y))
-#define YAMI_MIN(x, y)  ((x) < (y) ? (x) : (y))
-#define YAMI_B_TO_KB(b) ((f64)(b) / 1024.)
-#define YAMI_B_TO_MB(b) ((f64)(b) / (1024. * 1024.))
+#define YAMI_MAX(x, y)      ((x) > (y) ? (x) : (y))
+#define YAMI_MIN(x, y)      ((x) < (y) ? (x) : (y))
+#define YAMI_B_TO_KB(b)     ((f64)(b) / 1024.)
+#define YAMI_B_TO_MB(b)     ((f64)(b) / (1024. * 1024.))
+// Compute the next value of X aligned to Y
+#define YAMI_ALIGN(x, y)    (((x) + (y) - 1) & ~((y) - 1))
 
 #define YAMI_MAX_DIMS   ((int) 4)
 #define YAMI_LABEL_SIZE ((int) 64)
 #define YAMI_MINUS_INF  (-std::numeric_limits<f32>::infinity())
 
+#if !defined(YAMI_PAGE_SIZE)
+#   define YAMI_PAGE_SIZE ((usize) 4096)
+#endif
+
+static_assert(YAMI_MAX_DIMS == 4, "YAMI_MAX_DIMS != 4: update macros");
+
+
 // Get the index of dimension 'dim' of tensor 'PTR'.
 // dim is usize[YAMI_MAX_DIMS] = [1 x x x] so the actual first valid index is always at YAMI_MAX_DIMS - n_dim while the last
 // dimension index is always at YAMI_MAX_DIMS - 1.
+// TODO: it probably makes sense to distinguish between `get_dim_index` and `get_dim`, both are useful and used to some extent
 #define yami_tensor_dim(PTR, dim) (((dim) < 0) ? (YAMI_MAX_DIMS + (dim)) : (YAMI_MAX_DIMS - (PTR)->n_dim + (dim)))
 
 
@@ -78,13 +88,19 @@ extern "C" {
     using f32 = float;
     using f64 = double;
 
-    struct yami_context;
+    enum yami_scope : u8 {
+        GLOBAL,
+        LOCAL,
+        PRIVATE,
+    };
+
+    struct yami_ctx;
     struct yami_obj;
 
-    struct yami_context_init_params {
+    struct yami_init_params {
         int n_workers;
-        usize mem_size;
-        usize scratch_mem_size;
+        usize nb;
+        usize scratch_nb;
     };
 
     struct yami_tensor {
@@ -95,7 +111,9 @@ extern "C" {
         // Stride for a given dimension expressed in number of f32.
         usize stride[YAMI_MAX_DIMS];
         char label[YAMI_LABEL_SIZE];
+
         f32 *data;
+
         int n_dim;
         bool contiguous;
     };
@@ -113,41 +131,41 @@ extern "C" {
     }
 
     // ============================ Initialization ============================
-    extern yami_context *yami_init(yami_context_init_params params) noexcept;
-    extern void yami_free(yami_context *ctx) noexcept;
-    extern void yami_clear_ctx(yami_context *ctx) noexcept;
+    extern yami_ctx *yami_init(yami_init_params params) noexcept;
+    extern void yami_free(yami_ctx *ctx) noexcept;
+    extern void yami_clear_ctx(yami_ctx *ctx) noexcept;
 
     // ================================= Misc =================================
-    extern yami_context *yami_ctx_scratch(yami_context *ctx) noexcept;
-    extern YAMI_PURE usize yami_used_mem(const yami_context *ctx) noexcept;
-    extern void yami_mem_usage(const yami_context *ctx) noexcept;
+    extern void yami_set_scope(yami_ctx *ctx, yami_scope scope) noexcept;
+    extern YAMI_PURE usize yami_used_mem(const yami_ctx *ctx) noexcept;
+    extern void yami_mem_usage(const yami_ctx *ctx) noexcept;
     // ========================================================================
 
     // ========================== Tensor Manipulation =========================
-    extern yami_tensor *yami_new_tensor(yami_context *ctx, int n_dim,
+    extern yami_tensor *yami_new_tensor(yami_ctx *ctx, int n_dim,
                                         const usize *dim,
                                         const char *label = "",
                                         void *data = nullptr) noexcept;
-    extern yami_tensor *yami_tensor_1d(yami_context *ctx, const char *label,
+    extern yami_tensor *yami_tensor_1d(yami_ctx *ctx, const char *label,
                                        usize dim1) noexcept;
-    extern yami_tensor *yami_tensor_2d(yami_context *ctx, const char *label,
+    extern yami_tensor *yami_tensor_2d(yami_ctx *ctx, const char *label,
                                        usize dim1, usize dim2) noexcept;
-    extern yami_tensor *yami_tensor_3d(yami_context *ctx, const char *label,
+    extern yami_tensor *yami_tensor_3d(yami_ctx *ctx, const char *label,
                                        usize dim1, usize dim2,
                                        usize dim3) noexcept;
-    extern yami_tensor *yami_tensor_4d(yami_context *ctx, const char *label,
+    extern yami_tensor *yami_tensor_4d(yami_ctx *ctx, const char *label,
                                        usize dim1, usize dim2,
                                        usize dim3, usize dim4) noexcept;
     // View requires the tensor to be contiguous in memory
-    extern yami_tensor *yami_view_1d(yami_context *ctx, yami_tensor *x,
+    extern yami_tensor *yami_view_1d(yami_ctx *ctx, yami_tensor *x,
                                      usize dim1, usize offset = 0) noexcept;
-    extern yami_tensor *yami_view_2d(yami_context *ctx, yami_tensor *x,
+    extern yami_tensor *yami_view_2d(yami_ctx *ctx, yami_tensor *x,
                                      usize dim1, usize dim2,
                                      usize offset = 0) noexcept;
-    extern yami_tensor *yami_view_3d(yami_context *ctx, yami_tensor *x,
+    extern yami_tensor *yami_view_3d(yami_ctx *ctx, yami_tensor *x,
                                      usize dim1, usize dim2,
                                      usize dim3, usize offset = 0) noexcept;
-    extern yami_tensor *yami_view_4d(yami_context *ctx, yami_tensor *x,
+    extern yami_tensor *yami_view_4d(yami_ctx *ctx, yami_tensor *x,
                                      usize dim1, usize dim2,
                                      usize dim3, usize dim4,
                                      usize offset = 0) noexcept;
@@ -163,32 +181,32 @@ extern "C" {
     // without allocating any new memory.
     // NOTE: after this the tensor will no longer be contiguous in memory so a reshuffling is required
     // before accessing the data field for, say, a memcpy!
-    extern yami_tensor *yami_transpose(yami_context *,
+    extern yami_tensor *yami_transpose(yami_ctx *,
                                        yami_tensor *x,
                                        int dim1 = -1,
                                        int dim2 = -2) noexcept;
-    extern yami_tensor *yami_contiguous(yami_context *ctx, yami_tensor *x) noexcept;
+    extern yami_tensor *yami_contiguous(yami_ctx *ctx, yami_tensor *x) noexcept;
     // Returns a tensors which is the lower triangular part of x with the other elements
     // set to mask. x must be at least a 2D tensor.
-    extern yami_tensor *yami_lt_mask(yami_context *,
+    extern yami_tensor *yami_lt_mask(yami_ctx *,
                                      yami_tensor *x,
                                      f32 mask,
                                      usize start_idx = 0) noexcept;
-    extern yami_tensor *yami_mask_if(yami_context *,
+    extern yami_tensor *yami_mask_if(yami_ctx *,
                                      yami_tensor *x,
                                      yami_mask_flag flag,
                                      f32 val,
                                      f32 mask) noexcept;
-    extern yami_tensor *yami_embed(yami_context *ctx,
+    extern yami_tensor *yami_embed(yami_ctx *ctx,
                                    const yami_tensor *x,
                                    const int *indexes,
                                    usize n) noexcept;
-    extern yami_tensor *yami_rope(yami_context *,
+    extern yami_tensor *yami_rope(yami_ctx *,
                                   yami_tensor *x,
                                   usize n,
                                   bool k_mode,
                                   usize start_idx = 0) noexcept;
-    extern yami_tensor *yami_split(yami_context *ctx,
+    extern yami_tensor *yami_split(yami_ctx *ctx,
                                    const yami_tensor *x,
                                    usize n,
                                    int offset,
@@ -197,7 +215,7 @@ extern "C" {
     // the concat will happen.
     // Note: xa and xb are assumed to be contiguous.
     // Todo: have the possibility to append to the first tensor, this way copy is not needed
-    extern yami_tensor *yami_concat(yami_context *ctx,
+    extern yami_tensor *yami_concat(yami_ctx *ctx,
                                     const yami_tensor *xa,
                                     const yami_tensor *xb,
                                     int dim = 0) noexcept;
@@ -210,84 +228,82 @@ extern "C" {
     // ========================================================================
 
     // =========================== Tensor Operations ==========================
-    extern yami_tensor *yami_matmul(yami_context *ctx,
+    extern yami_tensor *yami_matmul(yami_ctx *ctx,
                                     const yami_tensor *xa,
                                     const yami_tensor *xb,
                                     yami_tensor *res = nullptr) noexcept;
-    extern yami_tensor *yami_add(yami_context *ctx,
+    extern yami_tensor *yami_add(yami_ctx *ctx,
                                  yami_tensor *xa,
                                  const yami_tensor *xb,
                                  bool in_place = false) noexcept;
-    extern yami_tensor *yami_addc(yami_context *ctx,
+    extern yami_tensor *yami_addc(yami_ctx *ctx,
                                   yami_tensor *x, f32 c,
                                   bool in_place = true) noexcept;
-    extern yami_tensor *yami_sub(yami_context *ctx,
+    extern yami_tensor *yami_sub(yami_ctx *ctx,
                                  yami_tensor *xa,
                                  const yami_tensor *xb,
                                  bool in_place = false) noexcept;
-    extern yami_tensor *yami_subc(yami_context *ctx,
+    extern yami_tensor *yami_subc(yami_ctx *ctx,
                                   yami_tensor *x, f32 c,
                                   bool in_place = true) noexcept;
-    extern yami_tensor *yami_mul(yami_context *ctx,
+    extern yami_tensor *yami_mul(yami_ctx *ctx,
                                  yami_tensor *xa,
                                  const yami_tensor *xb,
                                  bool in_place = false) noexcept;
-    extern yami_tensor *yami_mulc(yami_context *ctx,
+    extern yami_tensor *yami_mulc(yami_ctx *ctx,
                                   yami_tensor *x, f32 c,
                                   bool in_place = true) noexcept;
-    extern yami_tensor *yami_div(yami_context *ctx,
+    extern yami_tensor *yami_div(yami_ctx *ctx,
                                  yami_tensor *xa,
                                  const yami_tensor *xb,
                                  bool in_place = false) noexcept;
-    extern yami_tensor *yami_divc(yami_context *ctx,
+    extern yami_tensor *yami_divc(yami_ctx *ctx,
                                   yami_tensor *x, f32 c,
                                   bool in_place = true) noexcept;
     // ========================================================================
 
     // ============================ Math Functions ============================
-    extern yami_tensor *yami_gelu(yami_context *ctx,
+    extern yami_tensor *yami_gelu(yami_ctx *ctx,
                                   yami_tensor *x,
                                   bool in_place = true) noexcept;
-    extern yami_tensor *yami_swiglu(yami_context *ctx,
+    extern yami_tensor *yami_swiglu(yami_ctx *ctx,
                                     yami_tensor *x,
                                     bool in_place = true) noexcept;
-    extern yami_tensor *yami_sum(yami_context *ctx,
+    extern yami_tensor *yami_sum(yami_ctx *ctx,
                                      const yami_tensor *x,
                                      int dim) noexcept;
-    extern yami_tensor *yami_mean(yami_context *ctx,
+    extern yami_tensor *yami_mean(yami_ctx *ctx,
                                   const yami_tensor *x,
                                   int dim) noexcept;
-    extern yami_tensor *yami_var(yami_context *ctx,
+    extern yami_tensor *yami_var(yami_ctx *ctx,
                                  yami_tensor *x,
                                  int dim) noexcept;
-    extern yami_tensor *yami_exp(yami_context *ctx,
+    extern yami_tensor *yami_exp(yami_ctx *ctx,
                                  yami_tensor *x,
                                  bool in_place = true) noexcept;
-    extern yami_tensor *yami_sqrt(yami_context *ctx,
+    extern yami_tensor *yami_sqrt(yami_ctx *ctx,
                                   yami_tensor *x,
                                   bool in_place = true) noexcept;
-    extern yami_tensor *yami_rsqrt(yami_context *ctx,
+    extern yami_tensor *yami_rsqrt(yami_ctx *ctx,
                                    yami_tensor *x,
                                    bool in_place = true) noexcept;
-    extern yami_tensor *yami_square(yami_context *ctx,
+    extern yami_tensor *yami_square(yami_ctx *ctx,
                                     yami_tensor *x,
                                     bool in_place = true) noexcept;
-    extern yami_tensor *yami_max(yami_context *ctx,
+    extern yami_tensor *yami_max(yami_ctx *ctx,
                                  const yami_tensor *x,
                                  int dim) noexcept;
-    extern yami_tensor *yami_softmax(yami_context *ctx,
+    extern yami_tensor *yami_softmax(yami_ctx *ctx,
                                      yami_tensor *x,
                                      int dim = -1) noexcept;
-    extern yami_tensor *yami_layer_norm(yami_context *ctx,
+    extern yami_tensor *yami_layer_norm(yami_ctx *ctx,
                                         const yami_tensor *w,
                                         const yami_tensor *b,
                                         yami_tensor *x,
-                                        bool in_place = true,
                                         f32 eps = 1e-5f) noexcept;
-    extern yami_tensor *yami_rms_norm(yami_context *ctx,
+    extern yami_tensor *yami_rms_norm(yami_ctx *ctx,
                                       const yami_tensor *w,
                                       yami_tensor *x,
-                                      bool in_place = true,
                                       f32 eps = 1e-5f) noexcept;
     // ========================================================================
 

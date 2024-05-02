@@ -150,7 +150,7 @@ struct yami_token {
     usize idx;
 };
 
-extern void yami_load_model(yami_context *ctx,
+extern void yami_load_model(yami_ctx *ctx,
                             yami_model *model,
                             const char *model_file,
                             const char *tokenizer_file,

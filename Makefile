@@ -16,7 +16,7 @@ endif
 # At some point I should introduce "levels", for example logging each time a tensor is created could be enabled
 # only at the highest debug level.
 ifdef YAMI_FAST
-	CXXFLAGS	+= -DYAMI_FAST -Ofast -g -ffp-contract=fast -funroll-loops -flto=auto -fuse-linker-plugin
+	CXXFLAGS	+= -DYAMI_FAST -Ofast -ffp-contract=fast -funroll-loops -flto=auto -fuse-linker-plugin
 else
 	CXXFLAGS	+= -DYAMI_DEBUG -O0 -g
 endif
