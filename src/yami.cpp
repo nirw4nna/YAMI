@@ -1522,8 +1522,7 @@ yami_tensor *yami_softmax(yami_ctx *ctx, yami_tensor *x,
                                          yami_max(ctx,
                                                   x,
                                                   dim
-                                         ),
-                                         true
+                                         )
                                 )
     );
 

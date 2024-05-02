@@ -210,7 +210,7 @@ int main(int argc, char **argv) {
 
             yami_lt_mask(ctx, cur, YAMI_MINUS_INF, ctx_size);
 
-            yami_softmax(ctx, cur);
+            cur = yami_softmax(ctx, cur);
 
             yami_tensor *out = yami_matmul(ctx, cur, v_t);
 
@@ -275,7 +275,7 @@ int main(int argc, char **argv) {
                 const f32 smallest_of_the_k = yami_top_k(logits->data, vocab_size, settings.top_k).back().value;
                 yami_mask_if(ctx, logits, yami_mask_flag::LOWER, smallest_of_the_k, YAMI_MINUS_INF);
             }
-            yami_softmax(ctx, logits);
+            logits = yami_softmax(ctx, logits);
 
             std::discrete_distribution<> dist{logits->data, logits->data + logits->ne};
 
