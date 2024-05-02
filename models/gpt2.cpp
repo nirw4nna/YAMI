@@ -83,7 +83,7 @@ struct gpt2_model {
 
         YAMI_LOG_INFO("random seed\t\t= %ld", settings->seed);
         YAMI_LOG_INFO("temperature\t\t= %.2f", (f64) settings->temperature);
-        YAMI_LOG_INFO("top k\t\t= %ld", settings->top_k);
+        YAMI_LOG_INFO("top k\t\t= %d", settings->top_k);
         YAMI_LOG_INFO("mmap\t\t= %s", settings->use_mmap ? "true" : "false");
         YAMI_LOG_INFO("load time\t\t= %.2fs", (yami_timer() - load_start));
         YAMI_LOG_INFO("layers\t\t= %d", hparams.n_layers);
@@ -134,7 +134,7 @@ int main(int argc, char **argv) {
 
     const f64 start_time = yami_timer();
     std::vector<int> generated{gpt2.tokenizer->encode(settings.prompt)};
-    gpt2.metrics.prompt_tokens = generated.size();
+    gpt2.metrics.prompt_tokens = (int) generated.size();
     // TODO: add prompt eval time to the metrics
     gpt2.metrics.encode = yami_timer() - start_time;
 
@@ -144,11 +144,11 @@ int main(int argc, char **argv) {
     const usize head_size = gpt2.hparams.emb_size / n_heads;
     const f32 att_scale = 1.f / std::sqrt((f32) head_size);
 
-    usize ctx_size = 0;
+    int ctx_size = 0;
     for (int i = 0; i < settings.n_tokens; ++i) {
         yami_clear_ctx(ctx);
 
-        YAMI_ASSERT(ctx_size < gpt2.hparams.block_size);
+        YAMI_ASSERT(ctx_size < (int) gpt2.hparams.block_size);
 
         const f64 gen_start = yami_timer();
         pos.resize(generated.size());
@@ -255,11 +255,12 @@ int main(int argc, char **argv) {
         x = yami_layer_norm(ctx, gpt2.ln_f_w, gpt2.ln_f_b, x);
 
         yami_tensor *logits = yami_matmul(ctx, x, gpt2.lm_head_w);
-        const u32 vocab_size = gpt2.hparams.vocab_size;
+        const int vocab_size = (int) gpt2.hparams.vocab_size;
 
         // Select the last row of logits
         logits = yami_view_1d(ctx, logits, vocab_size, (logits->dim[yami_tensor_dim(logits, 0)] - 1) * vocab_size);
         gpt2.metrics.generation += (yami_timer() - gen_start);
+        // TODO: if it's the first loop this is not `generation` but `prompt eval`
 
         const f64 sampling_start = yami_timer();
 
@@ -289,7 +290,7 @@ int main(int argc, char **argv) {
         printf("%s", gpt2.tokenizer->decode(next_tok).c_str());
         fflush(stdout);
 
-        ctx_size += generated.size();
+        ctx_size += (int) generated.size();
         generated.clear();
         generated.push_back(next_tok);
 

@@ -44,7 +44,7 @@ struct yami_model_settings {
     usize main_ctx_size;
     usize scratch_ctx_size;
     usize seed;
-    usize top_k;
+    int top_k;
     int n_tokens;
     int n_workers;
     f32 temperature;
@@ -147,7 +147,7 @@ private:
 
 struct yami_token {
     f32 value;
-    usize idx;
+    int idx;
 };
 
 extern void yami_load_model(yami_ctx *ctx,
@@ -160,5 +160,5 @@ extern void yami_arg_parse(int argc, char **argv,
                            yami_model_settings *settings) noexcept;
 
 extern std::vector<yami_token> yami_top_k(const f32 *values,
-                                          usize ne,
-                                          usize k = 1) noexcept;
+                                          int ne,
+                                          int k = 1) noexcept;

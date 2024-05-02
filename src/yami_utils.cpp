@@ -671,7 +671,7 @@ void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexce
                 }
                 settings->temperature = temp;
             } else if (strcmp("-k", argv[i]) == 0 || strcmp("--top-k", argv[i]) == 0) {
-                const int top_k = (usize) ::strtol(argv[++i], nullptr, 10);
+                const int top_k = (int) ::strtol(argv[++i], nullptr, 10);
                 if (errno == ERANGE || errno == EINVAL) {
                     YAMI_LOG_FATAL("\"%s\" is not a valid value for K", argv[i]);
                 }
@@ -725,12 +725,12 @@ void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexce
 
 // Fixme: I don't really like the idea of allocating a dynamic array this big (50K elements),
 //  a possible solution could be to use alloca + qsort and then simply return the first K elements as a vector.
-std::vector<yami_token> yami_top_k(const f32 *values, const usize ne,
-                                   const usize k) noexcept {
+std::vector<yami_token> yami_top_k(const f32 *values, const int ne,
+                                   const int k) noexcept {
     std::vector<yami_token> res;
     res.reserve(ne);
 
-    for (usize i = 0; i < ne; ++i)
+    for (int i = 0; i < ne; ++i)
         res.emplace_back(yami_token{values[i], i});
 
     std::sort(res.begin(), res.end(), [](const yami_token &xa, const yami_token &xb) {

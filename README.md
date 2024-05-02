@@ -39,7 +39,7 @@ With this out of the way, let's try and fix some things in order to make this th
 - Verify the usefulness (profiling) of in-place operations, with `__restrict` and some vectorization we could probably
 gain significant performance boost
 - ~~Remove the `extended_dim` abstraction, it's useless~~ 
-- Switch to a multiple arenas scheme where each arena has its own lifetime
+- ~~Switch to a multiple arenas scheme where each arena has its own lifetime~~
 - ~~Add a `contiguous` flag~~
 - Use a decent GEMM, it's the main point of all this...
 - Remove `pthread`, use `OpenMP`
