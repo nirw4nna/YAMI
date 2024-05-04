@@ -96,7 +96,7 @@ struct gpt2_model {
         metrics.model_memory = yami_used_mem(ctx);
         printf("============================================================================\n");
 
-        // After loading the model data set the default yami scope to 'local'
+        // After loading the model data set the default allocation scope to local
         yami_set_scope(ctx, yami_scope::LOCAL);
     }
 
@@ -135,7 +135,6 @@ int main(int argc, char **argv) {
     const f64 start_time = yami_timer();
     std::vector<int> generated{gpt2.tokenizer->encode(settings.prompt)};
     gpt2.metrics.prompt_tokens = (int) generated.size();
-    // TODO: add prompt eval time to the metrics
     gpt2.metrics.encode = yami_timer() - start_time;
 
     std::vector<int> pos;
@@ -151,6 +150,7 @@ int main(int argc, char **argv) {
         YAMI_ASSERT(ctx_size < (int) gpt2.hparams.block_size);
 
         const f64 gen_start = yami_timer();
+
         pos.resize(generated.size());
         for (int j = 0; j < (int) generated.size(); ++j) {
             pos[j] = ctx_size + j;
@@ -259,13 +259,18 @@ int main(int argc, char **argv) {
 
         // Select the last row of logits
         logits = yami_view_1d(ctx, logits, vocab_size, (logits->dim[yami_tensor_dim(logits, 0)] - 1) * vocab_size);
-        gpt2.metrics.generation += (yami_timer() - gen_start);
-        // TODO: if it's the first loop this is not `generation` but `prompt eval`
+
+        // The first loop is prompt eval
+        if (generated.size() > 1) {
+            gpt2.metrics.prompt_eval += (yami_timer() - gen_start);
+        } else {
+            gpt2.metrics.generation += (yami_timer() - gen_start);
+        }
 
         const f64 sampling_start = yami_timer();
 
         int next_tok;
-        if (std::fpclassify(settings.temperature) == FP_ZERO) {
+        if (settings.temperature == 0.f) {
             // Always take the most likely token
             const yami_token next = yami_top_k(logits->data, vocab_size)[0];
             next_tok = next.idx;
@@ -274,7 +279,7 @@ int main(int argc, char **argv) {
             if (settings.top_k != 0) {
                 // If top_k is set crop the logits to the top k most likely ones
                 const f32 smallest_of_the_k = yami_top_k(logits->data, vocab_size, settings.top_k).back().value;
-                yami_mask_if(ctx, logits, yami_mask_flag::LOWER, smallest_of_the_k, YAMI_MINUS_INF);
+                yami_mask_if(ctx, logits, yami_mask::LOWER, smallest_of_the_k, YAMI_MINUS_INF);
             }
             logits = yami_softmax(ctx, logits);
 

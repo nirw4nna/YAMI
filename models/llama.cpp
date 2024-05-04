@@ -271,7 +271,7 @@ int main(int argc, char **argv) {
             if (settings.top_k != 0) {
                 // If top_k is set crop the logits to the top k most likely ones
                 const f32 smallest_of_the_k = yami_top_k(logits->data, vocab_size, settings.top_k).back().value;
-                yami_mask_if(scratch_ctx, logits, yami_mask_flag::LOWER, smallest_of_the_k, YAMI_MINUS_INF);
+                yami_mask_if(scratch_ctx, logits, yami_mask::LOWER, smallest_of_the_k, YAMI_MINUS_INF);
             }
             yami_softmax(scratch_ctx, logits);
 

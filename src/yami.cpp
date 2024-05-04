@@ -74,15 +74,11 @@
 
 #define yami_new_like(PTR)  (yami_new_tensor(ctx, (PTR)->n_dim, &(PTR)->dim[yami_tensor_dim(PTR, 0)]))
 
-#define yami_ctx_scope()    (ctx->arenas[ctx->scope])
+#define yami_scope_buffer() (ctx->buffers[ctx->scope])
 
 #define YAMI_RANGE_START    ((int) 0)
 #define YAMI_RANGE_STOP     ((int) 1)
 #define YAMI_BLOCK_SIZE     ((usize) 32)
-#define YAMI_SCOPES         ((int) 3)
-
-static_assert(YAMI_SCOPES == 3, "YAMI_SCOPES != 3: update yami_scope enum");
-
 
 using yami_dim_range = usize[YAMI_MAX_DIMS][2];
 
@@ -115,56 +111,40 @@ struct yami_worker {
     yami_task task;
 };
 
-static constexpr const char* YAMI_SCOPE_NAME[YAMI_SCOPES] = {
-        "GLOBAL",
-        "LOCAL",
-        "PRIVATE"
-};
-
 struct yami_obj {
     usize offset;
     usize nb;
 };
 
 // Simple trick: instead of having something like this:
-//      struct yami_arena {
+//      struct yami_mem_buffer {
 //          usize nb;
 //          void *mem;
 //      };
 // we can avoid the `void *mem` part and just allocate enough memory for the struct plus the actual memory buffer.
-// The actual address of the memory buffer starts at `sizeof(yami_arena)`.
-struct yami_arena {
+// The actual address of the memory buffer starts at `sizeof(yami_mem_buffer)`.
+struct yami_mem_buffer {
     usize nb;
     yami_obj *last;
     int n_objs;
 };
 
-// Each context has YAMI_SCOPES(3) arenas. An arena is simply a contiguous memory buffer holding objects with the same lifetime.
-// Each new allocation happens in the arena specified by `scope`, same goes for clearing the arena.
-// The size of the GLOBAL arena must be specified when initializing the context. For the LOCAL arena the size can either be specified
-// at initialization time or it will be set to be 10% of the GLOBAL arena size, which will in turn have an effective size of ~90% of the specified value.
-// The PRIVATE arena size can't be specified, it's either the 10% of the LOCAL arena (if specified) or 10% of the GLOBAL arena. Again, this means that the
-// actual size of the GLOBAL/LOCAL arena is actually 10% less than the specified value.
+// Each context has YAMI_SCOPES(3) buffers. A buffer is a memory region handled using a linear (arena) allocator, holding objects with the same lifetime.
+// Each new allocation happens in the buffer specified by `scope`, same goes for clearing.
+// The size of the GLOBAL buffer must be specified when initializing the context. This can be used for objects that should be initialized once and never modified
+// like the weights in a neural network. After loading the GLOBAL objects the user has to manually change the default scope to LOCAL.
+// For the LOCAL arena the size can either be specified at initialization or it will be automatically set to be 10% of the GLOBAL buffer size, which will in turn be reduced.
+// The PRIVATE buffer size can't be specified, it's either 10% of the LOCAL buffer (if specified) or 10% of the GLOBAL one. Again, this means that the
+// actual size of the GLOBAL/LOCAL buffer will be reduced.
+//
+// The PRIVATE buffer is used internally as a scratch buffer to store intermediate results inside certain functions (see: `yami_layer_norm`) and so the user can't use it.
+// The GLOBAL and LOCAL buffers instead are completely user-managed.
 struct yami_ctx {
-    yami_arena *arenas[YAMI_SCOPES];
+    yami_mem_buffer *buffers[YAMI_SCOPES];
     yami_worker *workers;
     int n_workers;
     yami_scope scope;
 };
-
-//struct yami_context {
-//    usize mem_size;
-//    void *mem_buffer;
-//
-//    yami_obj *last;
-//    // Each context has his own internal context which can be used as a scratch buffer.
-//    yami_context *scratch;
-//    int n_workers;
-//    yami_worker *workers;
-//
-//    int n_objs;
-//};
-
 
 // ============================================== Helper functions ==============================================
 static void yami_tensor_set_dim(yami_tensor *x, const int n_dim,
@@ -208,14 +188,14 @@ static yami_tensor *yami_alloc_result(yami_ctx *ctx, const yami_tensor *xa,
     yami_tensor *res = yami_new_tensor(ctx, n_dim, &dim[YAMI_MAX_DIMS - n_dim], label);
     return res;
 }
-
 // ==============================================================================================================
+// TODO: move all internal math functions like `yami_internal_vec_sub` here
 
-static inline void yami_internal_matmul_naive(f32 *__restrict out, const f32 *__restrict xa,
-                                              const f32 *__restrict xb, const usize n_rows_a,
-                                              const usize n_cols_a, const usize n_cols_b,
-                                              const usize a_row_start = 0, usize a_row_stop = 0,
-                                              const usize b_col_start = 0, usize b_col_stop = 0) noexcept {
+static YAMI_INLINE void yami_internal_matmul_naive(f32 *__restrict out, const f32 *__restrict xa,
+                                                   const f32 *__restrict xb, const usize n_rows_a,
+                                                   const usize n_cols_a, const usize n_cols_b,
+                                                   const usize a_row_start = 0, usize a_row_stop = 0,
+                                                   const usize b_col_start = 0, usize b_col_stop = 0) noexcept {
     b_col_stop = b_col_stop == 0 ? n_cols_b : YAMI_MIN(b_col_stop, n_cols_b);
     a_row_stop = a_row_stop == 0 ? n_rows_a : YAMI_MIN(a_row_stop, n_rows_a);
     for (usize i = a_row_start; i < a_row_stop; ++i) {
@@ -234,11 +214,11 @@ static inline void yami_internal_matmul_naive(f32 *__restrict out, const f32 *__
 // - cache line is 64B
 // - TLB lv1 is 64 entries for 4KB/entry
 // - AVX2
-static inline void yami_internal_matmul_blocked(f32 *__restrict res, const f32 *__restrict xa,
-                                                const f32 *__restrict xb, const usize n_rows_a,
-                                                const usize n_cols_a, const usize n_cols_b,
-                                                const usize a_row_start = 0, usize a_row_stop = 0,
-                                                const usize b_col_start = 0, usize b_col_stop = 0) noexcept {
+static YAMI_INLINE void yami_internal_matmul_blocked(f32 *__restrict res, const f32 *__restrict xa,
+                                                     const f32 *__restrict xb, const usize n_rows_a,
+                                                     const usize n_cols_a, const usize n_cols_b,
+                                                     const usize a_row_start = 0, usize a_row_stop = 0,
+                                                     const usize b_col_start = 0, usize b_col_stop = 0) noexcept {
     // This is the first implementation of what looks like a very efficient GEMM algorithm.
     // TODO: we have to investigate 2 things:
     //  - what's the best set of parameters for this algorithm
@@ -369,17 +349,17 @@ static void *yami_worker_thread(void *arg) noexcept {
     pthread_exit(nullptr);
 }
 
-static yami_arena *yami_arena_alloc(const usize nb) noexcept {
-    const usize arena_size = YAMI_ALIGN(nb + sizeof(yami_arena), YAMI_PAGE_SIZE);
+static yami_mem_buffer *yami_buffer_alloc(const usize nb) noexcept {
+    const usize buff_size = YAMI_ALIGN(nb + sizeof(yami_mem_buffer), YAMI_PAGE_SIZE);
     
-    yami_arena *arena = (yami_arena *) aligned_alloc(YAMI_PAGE_SIZE, arena_size);
-    YAMI_ASSERT(arena != nullptr);
+    yami_mem_buffer *buff = (yami_mem_buffer *) aligned_alloc(YAMI_PAGE_SIZE, buff_size);
+    YAMI_ASSERT(buff != nullptr);
 
-    arena->nb = arena_size - sizeof(yami_arena);
-    arena->n_objs = 0;
-    arena->last = nullptr;
+    buff->nb = buff_size - sizeof(yami_mem_buffer);
+    buff->n_objs = 0;
+    buff->last = nullptr;
     
-    return arena;
+    return buff;
 }
 
 yami_ctx *yami_init(const yami_init_params params) noexcept {
@@ -399,9 +379,9 @@ yami_ctx *yami_init(const yami_init_params params) noexcept {
         scope_nb[PRIVATE] = (usize) ((f64) params.nb * 0.1);
     }
 
-    ctx->arenas[GLOBAL] = yami_arena_alloc(scope_nb[GLOBAL]);
-    ctx->arenas[LOCAL] = yami_arena_alloc(scope_nb[LOCAL]);
-    ctx->arenas[PRIVATE] = yami_arena_alloc(scope_nb[PRIVATE]);
+    ctx->buffers[GLOBAL] = yami_buffer_alloc(scope_nb[GLOBAL]);
+    ctx->buffers[LOCAL] = yami_buffer_alloc(scope_nb[LOCAL]);
+    ctx->buffers[PRIVATE] = yami_buffer_alloc(scope_nb[PRIVATE]);
 
     const int n_cpus = get_nprocs();
     int n_workers = params.n_workers;
@@ -438,9 +418,9 @@ yami_ctx *yami_init(const yami_init_params params) noexcept {
 
     YAMI_LOG_INFO("created new context %p: workers=%d GLOBAL=%ldMB LOCAL=%ldMB PRIVATE=%ldMB",
                   (void *) ctx, ctx->n_workers,
-                  (usize) YAMI_B_TO_MB(ctx->arenas[GLOBAL]->nb),
-                  (usize) YAMI_B_TO_MB(ctx->arenas[LOCAL]->nb),
-                  (usize) YAMI_B_TO_MB(ctx->arenas[PRIVATE]->nb)
+                  (usize) YAMI_B_TO_MB(ctx->buffers[GLOBAL]->nb),
+                  (usize) YAMI_B_TO_MB(ctx->buffers[LOCAL]->nb),
+                  (usize) YAMI_B_TO_MB(ctx->buffers[PRIVATE]->nb)
     );
 
     return ctx;
@@ -449,14 +429,14 @@ yami_ctx *yami_init(const yami_init_params params) noexcept {
 void yami_free(yami_ctx *ctx) noexcept {
     YAMI_LOG_DEBUG("freeing context %p GLOBAL=%ldMB LOCAL=%ldMB PRIVATE=%ldMB",
                    (void *) ctx,
-                   (usize) YAMI_B_TO_MB(ctx->arenas[GLOBAL]->nb),
-                   (usize) YAMI_B_TO_MB(ctx->arenas[LOCAL]->nb),
-                   (usize) YAMI_B_TO_MB(ctx->arenas[PRIVATE]->nb)
+                   (usize) YAMI_B_TO_MB(ctx->buffers[GLOBAL]->nb),
+                   (usize) YAMI_B_TO_MB(ctx->buffers[LOCAL]->nb),
+                   (usize) YAMI_B_TO_MB(ctx->buffers[PRIVATE]->nb)
     );
 
-    free(ctx->arenas[GLOBAL]);
-    free(ctx->arenas[LOCAL]);
-    free(ctx->arenas[PRIVATE]);
+    free(ctx->buffers[GLOBAL]);
+    free(ctx->buffers[LOCAL]);
+    free(ctx->buffers[PRIVATE]);
 
     if (ctx->n_workers > 1) {
         for (int i = 1; i < ctx->n_workers; ++i) {
@@ -484,39 +464,40 @@ void yami_free(yami_ctx *ctx) noexcept {
 }
 
 void yami_clear_ctx(yami_ctx *ctx) noexcept {
-    yami_arena *arena = yami_ctx_scope();
+    yami_mem_buffer *buff = yami_scope_buffer();
 
-    YAMI_LOG_DEBUG("clearing arena %s of context %p mem_size=%ldMB n_objs=%d",
-                   YAMI_SCOPE_NAME[ctx->scope],
+    YAMI_LOG_DEBUG("clearing %s buffer of %p mem_size=%ldMB n_objs=%d",
+                   YAMI_SCOPE[ctx->scope],
                    (void *)ctx,
-                   (usize) YAMI_B_TO_MB(arena->nb),
-                   arena->n_objs
+                   (usize) YAMI_B_TO_MB(buff->nb),
+                   buff->n_objs
     );
 
-    arena->last = nullptr;
-    arena->n_objs = 0;
+    buff->last = nullptr;
+    buff->n_objs = 0;
 }
 
 void yami_set_scope(yami_ctx *ctx, const yami_scope scope) noexcept {
+    YAMI_ASSERT(scope != PRIVATE);
     ctx->scope = scope;
 }
 
 usize yami_used_mem(const yami_ctx *ctx) noexcept {
-    const yami_arena *arena = yami_ctx_scope();
-    return arena->last == nullptr ? 0 : arena->last->offset + arena->last->nb;
+    yami_mem_buffer *buff = yami_scope_buffer();
+    return buff->last == nullptr ? 0 : buff->last->offset + buff->last->nb;
 }
 
 void yami_mem_usage(const yami_ctx *ctx) noexcept {
-    const yami_arena *arena = yami_ctx_scope();
+    yami_mem_buffer *buff = yami_scope_buffer();
 
     const usize used = yami_used_mem(ctx);
 
     YAMI_LOG_INFO("scope=%s n_objs=%d used memory %.2fMB out of %ldMB (%.2f%%)",
-                  YAMI_SCOPE_NAME[ctx->scope],
-                  arena->n_objs,
+                  YAMI_SCOPE[ctx->scope],
+                  buff->n_objs,
                   YAMI_B_TO_MB(used),
-                  (usize) YAMI_B_TO_MB(arena->nb),
-                  ((f64) (used) / (f64) (arena->nb)) * 100.
+                  (usize) YAMI_B_TO_MB(buff->nb),
+                  ((f64) (used) / (f64) (buff->nb)) * 100.
     );
 }
 
@@ -542,28 +523,28 @@ yami_tensor *yami_new_tensor(yami_ctx *ctx, const int n_dim,
     if (data == nullptr) {
         mem_needed += ne * sizeof(f32);
     }
-    yami_arena *arena = yami_ctx_scope();
+    yami_mem_buffer *buff = yami_scope_buffer();
 
-    const usize last_offset = arena->last == nullptr ? 0 : arena->last->offset;
-    const usize last_size = arena->last == nullptr ? 0 : arena->last->nb;
+    const usize last_offset = buff->last == nullptr ? 0 : buff->last->offset;
+    const usize last_size = buff->last == nullptr ? 0 : buff->last->nb;
     const usize last_end = last_offset + last_size;
 
-    if (mem_needed + sizeof(yami_obj) + last_end > arena->nb) {
+    if (mem_needed + sizeof(yami_obj) + last_end > buff->nb) {
         YAMI_LOG_ERR("can't allocate %.2fMB", YAMI_B_TO_MB(mem_needed));
         return nullptr;
     }
 
     // The actual buffer starts after the 'header' of the arena struct.
-    yami_obj *new_obj = (yami_obj *) ((byte *) arena + last_end + sizeof(yami_arena));
+    yami_obj *new_obj = (yami_obj *) ((byte *) buff + last_end + sizeof(yami_mem_buffer));
     // The offset refers to the actual offset of the "contained" object which comes after
     // the yami_object "header".
     new_obj->offset = last_end + sizeof(yami_obj);
     new_obj->nb = mem_needed;
 
-    arena->last = new_obj;
-    arena->n_objs++;
+    buff->last = new_obj;
+    buff->n_objs++;
     // Allocate the actual tensor
-    yami_tensor *new_tensor = (yami_tensor *) ((byte *) arena + sizeof(yami_arena) + new_obj->offset);
+    yami_tensor *new_tensor = (yami_tensor *) ((byte *) buff + sizeof(yami_mem_buffer) + new_obj->offset);
 
     new_tensor->ne = ne;
     new_tensor->contiguous = true;
@@ -734,7 +715,7 @@ yami_tensor *yami_lt_mask(yami_ctx *, yami_tensor *x,
 }
 
 yami_tensor *yami_mask_if(yami_ctx *, yami_tensor *x,
-                          const yami_mask_flag flag, const f32 val,
+                          const yami_mask flag, const f32 val,
                           const f32 mask) noexcept {
     YAMI_TENSOR_FIELDS(x, 3);
     yami_for(x, 3) {
@@ -948,8 +929,9 @@ void yami_copy(const yami_tensor *x, yami_tensor *res) noexcept {
     memcpy(res->data, x->data, res->ne * sizeof(f32));
 }
 
-yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *xa,
-                         const yami_tensor *xb, yami_tensor *res) noexcept {
+yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
+                         const yami_tensor *__restrict xb,
+                         yami_tensor *__restrict res) noexcept {
     // Verify that the two matrices are at least 2-dimensional
     if (xa->n_dim < 2 || xb->n_dim < 2) {
         YAMI_LOG_FATAL("too few dimensions, use yami_mul for 1D tensor multiply");
@@ -1078,14 +1060,14 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *xa,
     return res;
 }
 
-static inline void yami_internal_vec_add(f32 *out, const f32 *xa,
-                                         const f32 *xb, const usize n) noexcept {
+static YAMI_INLINE void yami_internal_vec_add(f32 *out, const f32 *xa,
+                                              const f32 *xb, const usize n) noexcept {
     for (usize i = 0; i < n; ++i)
         out[i] = xa[i] + xb[i];
 }
 
-static inline void yami_internal_vec_addc(f32 *out, const f32 *x,
-                                          const f32 c, const usize n) noexcept {
+static YAMI_INLINE void yami_internal_vec_addc(f32 *out, const f32 *x,
+                                               const f32 c, const usize n) noexcept {
     for (usize i = 0; i < n; ++i)
         out[i] = x[i] + c;
 }
@@ -1141,20 +1123,20 @@ yami_tensor *yami_addc(yami_ctx *ctx, yami_tensor *x,
     return res;
 }
 
-static inline void yami_internal_vec_sub(f32 *out, const f32 *xa,
-                                         const f32 *xb, const usize n) noexcept {
+static YAMI_INLINE void yami_internal_vec_sub(f32 *out, const f32 *xa,
+                                              const f32 *xb, const usize n) noexcept {
     for (usize i = 0; i < n; ++i)
         out[i] = xa[i] - xb[i];
 }
 
-static inline void yami_internal_vec_subc(f32 *out, const f32 *x,
+static YAMI_INLINE void yami_internal_vec_subc(f32 *out, const f32 *x,
                                           const f32 c, const usize n) noexcept {
     for (usize i = 0; i < n; ++i)
         out[i] = x[i] - c;
 }
 
-static inline void yami_internal_c_vec_sub(f32 *out, const f32 c,
-                                           const f32 *x, const usize n) noexcept {
+static YAMI_INLINE void yami_internal_c_vec_sub(f32 *out, const f32 c,
+                                                const f32 *x, const usize n) noexcept {
     for (usize i = 0; i < n; ++i)
         out[i] = c - x[i];
 }
@@ -1213,14 +1195,14 @@ yami_tensor *yami_subc(yami_ctx *ctx, yami_tensor *x,
     return res;
 }
 
-static inline void yami_internal_vec_mul(f32 *out, const f32 *xa,
-                                         const f32 *xb, const usize n) noexcept {
+static YAMI_INLINE void yami_internal_vec_mul(f32 *out, const f32 *xa,
+                                              const f32 *xb, const usize n) noexcept {
     for (usize i = 0; i < n; ++i)
         out[i] = xa[i] * xb[i];
 }
 
-static inline void yami_internal_vec_mulc(f32 *out, const f32 *x,
-                                          const f32 c, const usize n) noexcept {
+static YAMI_INLINE void yami_internal_vec_mulc(f32 *out, const f32 *x,
+                                               const f32 c, const usize n) noexcept {
     for (usize i = 0; i < n; ++i)
         out[i] = x[i] * c;
 }
@@ -1273,20 +1255,20 @@ yami_tensor *yami_mulc(yami_ctx *ctx, yami_tensor *x,
     return res;
 }
 
-static inline void yami_internal_vec_div(f32 *out, const f32 *xa,
-                                         const f32 *xb, const usize n) noexcept {
+static YAMI_INLINE void yami_internal_vec_div(f32 *out, const f32 *xa,
+                                              const f32 *xb, const usize n) noexcept {
     for (usize i = 0; i < n; ++i)
         out[i] = xa[i] / xb[i];
 }
 
-static inline void yami_internal_vec_divc(f32 *out, const f32 *x,
-                                          const f32 c, const usize n) noexcept {
+static YAMI_INLINE void yami_internal_vec_divc(f32 *out, const f32 *x,
+                                               const f32 c, const usize n) noexcept {
     for (usize i = 0; i < n; ++i)
         out[i] = x[i] / c;
 }
 
-static inline void yami_internal_c_vec_div(f32 *out, const f32 c,
-                                           const f32 *x, const usize n) noexcept {
+static YAMI_INLINE void yami_internal_c_vec_div(f32 *out, const f32 c,
+                                                const f32 *x, const usize n) noexcept {
     for (usize i = 0; i < n; ++i)
         out[i] = c / x[i];
 }
@@ -1341,17 +1323,6 @@ yami_tensor *yami_divc(yami_ctx *ctx, yami_tensor *x,
     yami_tensor *res = in_place ? x : yami_new_like(x);
     yami_internal_vec_divc(res->data, x->data, c, res->ne);
     return res;
-}
-
-static inline void yami_internal_gelu(f32 *out, const f32 *x,
-                                      const usize n) noexcept {
-    static const f32 sqrt_2_pi = std::sqrt(M_2_PIf);
-    const f32 c = 0.044715f;
-
-    for (usize i = 0; i < n; ++i) {
-        const f32 x_i = x[i];
-        out[i] = (0.5f * x_i) * (1.f + tanhf(sqrt_2_pi * (x_i + (c * x_i) * (x_i * x_i))));
-    }
 }
 
 yami_tensor *yami_gelu(yami_ctx *ctx, yami_tensor *x,

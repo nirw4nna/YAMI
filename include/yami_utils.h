@@ -8,14 +8,26 @@
 #include <queue>
 #include <memory>
 
-enum yami_models : u8{
-    GPT2 = 0,
-    LLAMA = 1,
+enum yami_models : u8 {
+    GPT2,
+    LLAMA,
+    MODEL_INVALID,
 };
 
-enum yami_tokenizers : u8{
-    BPE = 0,
-    SP = 1,
+enum yami_tokenizers : u8 {
+    BPE,
+    SP,
+    TOKENIZER_INVALID,
+};
+
+static constexpr const char* YAMI_MODELS[2] = {
+        "GPT2",
+        "LLaMA",
+};
+
+static constexpr const char* YAMI_TOKENIZERS[2] = {
+        "BPE",
+        "SP",
 };
 
 struct yami_mmap {
@@ -55,21 +67,32 @@ struct yami_model_settings {
 };
 
 struct yami_perf_metrics {
+    // Time required to encode the prompt
     f64 encode;
+    // Time required for prompt evaluation
+    f64 prompt_eval;
+    // Time required to generate the logits for the next token
     f64 generation;
+    // Time required to sample the next token given its logits
     f64 sampling;
+    // Total time spent in the forward loop
     f64 total;
+
     usize model_memory;
     usize inference_memory;
     int generated_tokens;
     int prompt_tokens;
 
-    inline void report() const noexcept {
+    YAMI_INLINE void report() const noexcept {
         YAMI_LOG_INFO("prompt tokens\t\t= %d", prompt_tokens);
         YAMI_LOG_INFO("generated tokens\t= %d", generated_tokens);
         YAMI_LOG_INFO("model size\t\t= %.2f MB", YAMI_B_TO_MB(model_memory));
-        YAMI_LOG_INFO("inference memory\t= %.2f MB", YAMI_B_TO_MB(inference_memory / generated_tokens));
+        YAMI_LOG_INFO("inference memory\t= %.2f MB", YAMI_B_TO_MB((f64) inference_memory / generated_tokens));
         YAMI_LOG_INFO("encode time\t\t= %.2fms", encode * 1000.);
+        YAMI_LOG_INFO("prompt eval time\t= %.2fms\t(%.2fms/tok,\t%.2f tokens/s)",
+                      prompt_eval * 1000.,
+                      (prompt_eval * 1000.) / prompt_tokens,
+                      prompt_tokens / prompt_eval);
         YAMI_LOG_INFO("generation time\t\t= %.2fms\t(%.2fms/tok,\t%.2f tokens/s)",
                       generation * 1000.,
                       (generation * 1000.) / generated_tokens,

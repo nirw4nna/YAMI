@@ -56,12 +56,14 @@
 #define YAMI_MAX_DIMS   ((int) 4)
 #define YAMI_LABEL_SIZE ((int) 64)
 #define YAMI_MINUS_INF  (-std::numeric_limits<f32>::infinity())
+#define YAMI_SCOPES     ((int) 3)
 
 #if !defined(YAMI_PAGE_SIZE)
 #   define YAMI_PAGE_SIZE ((usize) 4096)
 #endif
 
-static_assert(YAMI_MAX_DIMS == 4, "YAMI_MAX_DIMS != 4: update macros");
+static_assert(YAMI_MAX_DIMS == 4, "YAMI_MAX_DIMS != 4: update");
+static_assert(YAMI_SCOPES == 3, "YAMI_SCOPES != 3: update");
 
 
 // Get the index of dimension 'dim' of tensor 'PTR'.
@@ -94,6 +96,12 @@ extern "C" {
         PRIVATE,
     };
 
+    static constexpr const char* YAMI_SCOPE[YAMI_SCOPES] = {
+            "GLOBAL",
+            "LOCAL",
+            "PRIVATE"
+    };
+
     struct yami_ctx;
     struct yami_obj;
 
@@ -118,7 +126,7 @@ extern "C" {
         bool contiguous;
     };
 
-    enum yami_mask_flag : u8 {
+    enum yami_mask : u8 {
         LOWER,
         EQUAL,
         GREATER,
@@ -194,7 +202,7 @@ extern "C" {
                                      usize start_idx = 0) noexcept;
     extern yami_tensor *yami_mask_if(yami_ctx *,
                                      yami_tensor *x,
-                                     yami_mask_flag flag,
+                                     yami_mask flag,
                                      f32 val,
                                      f32 mask) noexcept;
     extern yami_tensor *yami_embed(yami_ctx *ctx,
@@ -229,9 +237,9 @@ extern "C" {
 
     // =========================== Tensor Operations ==========================
     extern yami_tensor *yami_matmul(yami_ctx *ctx,
-                                    const yami_tensor *xa,
-                                    const yami_tensor *xb,
-                                    yami_tensor *res = nullptr) noexcept;
+                                    const yami_tensor *__restrict xa,
+                                    const yami_tensor *__restrict xb,
+                                    yami_tensor *__restrict res = nullptr) noexcept;
     extern yami_tensor *yami_add(yami_ctx *ctx,
                                  yami_tensor *xa,
                                  const yami_tensor *xb,

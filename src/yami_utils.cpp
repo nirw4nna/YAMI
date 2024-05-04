@@ -53,7 +53,7 @@ yami_mmap::~yami_mmap() {
     munmap(data, file_size);
 }
 
-static inline void bytes_from_unicode(const int unicode, int *n, u8 *buff) noexcept {
+static YAMI_INLINE void bytes_from_unicode(const int unicode, int *n, u8 *buff) noexcept {
     if (unicode >= 0 && unicode <= 0x7F) {
         buff[0] = (u8) unicode;
         *n = 1;
@@ -64,7 +64,7 @@ static inline void bytes_from_unicode(const int unicode, int *n, u8 *buff) noexc
     }
 }
 
-static inline std::string to_utf8(const int unicode) noexcept {
+static YAMI_INLINE std::string to_utf8(const int unicode) noexcept {
     YAMI_ASSERT(unicode >= 0 && unicode <= 0x7FF);
     std::string utf8;
     utf8.reserve(2);
@@ -79,7 +79,7 @@ static inline std::string to_utf8(const int unicode) noexcept {
     return utf8;
 }
 
-static inline int from_utf8(const std::string& text, usize *offset = nullptr) noexcept {
+static YAMI_INLINE int from_utf8(const std::string& text, usize *offset = nullptr) noexcept {
     if (text.empty())
         return -1;
 
@@ -142,7 +142,7 @@ yami_bpe_tokenizer::yami_bpe_tokenizer(const std::vector<std::string>& bpe_pairs
     }
 }
 
-static inline std::unordered_set<std::string> get_bigrams(const std::vector<std::string>& word) noexcept {
+static YAMI_INLINE std::unordered_set<std::string> get_bigrams(const std::vector<std::string>& word) noexcept {
     std::unordered_set<std::string> bigrams;
 
     std::string prev = word[0];
@@ -156,18 +156,18 @@ static inline std::unordered_set<std::string> get_bigrams(const std::vector<std:
 }
 
 // last letter LATIN CAPITAL LETTER N WITH ACUTE (U+0143)
-static inline YAMI_STRICTLY_PURE bool is_letter(const int unicode) noexcept {
+static YAMI_INLINE YAMI_STRICTLY_PURE bool is_letter(const int unicode) noexcept {
     return (unicode >= 0x41 && unicode <= 0x5A) || (unicode >= 0x61 && unicode <= 0x7A) ||
            (unicode >= 0xC0 && unicode <= 0xD6) || (unicode >= 0xD8 && unicode <= 0xF6) ||
            (unicode >= 0xF8 && unicode <= 0x131) || (unicode >= 0x134 && unicode <= 0x143);
 }
 
-static inline YAMI_STRICTLY_PURE bool is_digit(const int unicode) noexcept {
+static YAMI_INLINE YAMI_STRICTLY_PURE bool is_digit(const int unicode) noexcept {
     return (unicode >= 0x30 && unicode <= 0x39) || (unicode == 0xB2) ||
            (unicode == 0xB3) || (unicode == 0xB9);
 }
 
-static inline YAMI_STRICTLY_PURE bool is_whitespace(const int unicode) noexcept {
+static YAMI_INLINE YAMI_STRICTLY_PURE bool is_whitespace(const int unicode) noexcept {
     return (unicode >= 0x08 && unicode <= 0x0D) || (unicode >= 0x1C && unicode <= 0x20) ||
            (unicode == 0x85) || (unicode == 0xA0);
 }
@@ -364,7 +364,7 @@ std::string yami_bpe_tokenizer::decode(const int bpe_idx) noexcept {
     return decoded;
 }
 
-static inline YAMI_STRICTLY_PURE int utf8_len(const char c) noexcept {
+static YAMI_INLINE YAMI_STRICTLY_PURE int utf8_len(const char c) noexcept {
     // UTF-8 encoding length depends on the first bits of the first byte:
     //  - 0xxx: 1 byte
     //  - 110x: 2 bytes
@@ -379,11 +379,11 @@ static inline YAMI_STRICTLY_PURE int utf8_len(const char c) noexcept {
 
 yami_llama_tokenizer::yami_llama_tokenizer(std::vector<std::string> &&vocab,
                                            const std::vector<f32> &scores) : id_to_tok_(vocab) {
-    const size n_vocab = id_to_tok_.size();
+    const int n_vocab = (int) id_to_tok_.size();
     tok_to_id_.reserve(n_vocab);
     tok_to_score_.reserve(n_vocab);
 
-    for (size i = 0; i < n_vocab; ++i) {
+    for (int i = 0; i < n_vocab; ++i) {
         tok_to_id_[id_to_tok_[i]] = i;
         tok_to_score_[id_to_tok_[i]] = scores[i];
     }
@@ -479,13 +479,13 @@ static void load_tokenizer(yami_model *model, const char *tokenizer_file) noexce
     yami_tokenizers type;
     read(&type, sizeof(yami_tokenizers), 1, f);
 
-    if (type != yami_tokenizers::BPE && type != yami_tokenizers::SP) {
+    if (type >= yami_tokenizers::TOKENIZER_INVALID) {
         fclose(f);
         YAMI_LOG_FATAL("unknown tokenizer type %d", type);
     }
     model->tokenizer = type;
 
-    YAMI_LOG_INFO("loading %s tokenizer from \"%s\"", model->tokenizer == yami_tokenizers::BPE ? "BPE" : "SP", tokenizer_file);
+    YAMI_LOG_INFO("loading %s tokenizer from \"%s\"", YAMI_TOKENIZERS[type], tokenizer_file);
 
     std::string tok;
     switch (model->tokenizer) {
@@ -566,14 +566,14 @@ void yami_load_model(yami_ctx *ctx, yami_model *model,
     yami_models type;
     read(&type, sizeof(yami_models), 1, f);
 
-    if(type != yami_models::GPT2 && type != yami_models::LLAMA) {
+    if(type >= yami_models::MODEL_INVALID) {
         fclose(f);
         YAMI_LOG_FATAL("unknown model type %d", type);
     }
 
     model->type = type;
 
-    YAMI_LOG_INFO("loading %s model from \"%s\"", type == yami_models::LLAMA ? "LLaMA" : "GPT2", model_file);
+    YAMI_LOG_INFO("loading %s model from \"%s\"", YAMI_MODELS[type], model_file);
 
     u16 hp_size;
     read(&hp_size, sizeof(u16), 1, f);
