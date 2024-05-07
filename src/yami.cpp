@@ -108,6 +108,58 @@ struct yami_ctx {
     yami_scope scope;
 };
 
+// ============================================== Math primitives ==============================================
+static YAMI_INLINE void yami_internal_vec_add(f32 *out, const f32 *xa,
+                                              const f32 *xb, const usize n) noexcept {
+    for (usize i = 0; i < n; ++i) out[i] = xa[i] + xb[i];
+}
+
+static YAMI_INLINE void yami_internal_vec_addc(f32 *out, const f32 *x,
+                                               const f32 c, const usize n) noexcept {
+    for (usize i = 0; i < n; ++i) out[i] = x[i] + c;
+}
+
+static YAMI_INLINE void yami_internal_vec_sub(f32 *out, const f32 *xa,
+                                              const f32 *xb, const usize n) noexcept {
+    for (usize i = 0; i < n; ++i) out[i] = xa[i] - xb[i];
+}
+
+static YAMI_INLINE void yami_internal_vec_subc(f32 *out, const f32 *x,
+                                               const f32 c, const usize n) noexcept {
+    for (usize i = 0; i < n; ++i) out[i] = x[i] - c;
+}
+
+static YAMI_INLINE void yami_internal_c_vec_sub(f32 *out, const f32 c,
+                                                const f32 *x, const usize n) noexcept {
+    for (usize i = 0; i < n; ++i) out[i] = c - x[i];
+}
+
+static YAMI_INLINE void yami_internal_vec_mul(f32 *out, const f32 *xa,
+                                              const f32 *xb, const usize n) noexcept {
+    for (usize i = 0; i < n; ++i) out[i] = xa[i] * xb[i];
+}
+
+static YAMI_INLINE void yami_internal_vec_mulc(f32 *out, const f32 *x,
+                                               const f32 c, const usize n) noexcept {
+    for (usize i = 0; i < n; ++i) out[i] = x[i] * c;
+}
+
+static YAMI_INLINE void yami_internal_vec_div(f32 *out, const f32 *xa,
+                                              const f32 *xb, const usize n) noexcept {
+    for (usize i = 0; i < n; ++i) out[i] = xa[i] / xb[i];
+}
+
+static YAMI_INLINE void yami_internal_vec_divc(f32 *out, const f32 *x,
+                                               const f32 c, const usize n) noexcept {
+    for (usize i = 0; i < n; ++i) out[i] = x[i] / c;
+}
+
+static YAMI_INLINE void yami_internal_c_vec_div(f32 *out, const f32 c,
+                                                const f32 *x, const usize n) noexcept {
+    for (usize i = 0; i < n; ++i) out[i] = c / x[i];
+}
+// =============================================================================================================
+
 // ============================================== Helper functions ==============================================
 static void yami_tensor_set_dim(yami_tensor *x, const int n_dim,
                                 const usize *dim) noexcept {
@@ -150,21 +202,20 @@ static yami_tensor *yami_alloc_result(yami_ctx *ctx, const yami_tensor *xa,
     yami_tensor *res = yami_new_tensor(ctx, n_dim, &dim[YAMI_MAX_DIMS - n_dim], label);
     return res;
 }
-// ==============================================================================================================
-// TODO: move all internal math functions like `yami_internal_vec_sub` here
 
 static yami_mem_buffer *yami_buffer_alloc(const usize nb) noexcept {
     const usize buff_size = YAMI_ALIGN(nb + sizeof(yami_mem_buffer), YAMI_PAGE_SIZE);
-    
+
     yami_mem_buffer *buff = (yami_mem_buffer *) aligned_alloc(YAMI_PAGE_SIZE, buff_size);
     YAMI_ASSERT(buff != nullptr);
 
     buff->nb = buff_size - sizeof(yami_mem_buffer);
     buff->n_objs = 0;
     buff->last = nullptr;
-    
+
     return buff;
 }
+// ==============================================================================================================
 
 yami_ctx *yami_init(const yami_init_params params) noexcept {
     YAMI_ASSERT(params.nb > 0);
@@ -761,18 +812,6 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
     return res;
 }
 
-static YAMI_INLINE void yami_internal_vec_add(f32 *out, const f32 *xa,
-                                              const f32 *xb, const usize n) noexcept {
-    for (usize i = 0; i < n; ++i)
-        out[i] = xa[i] + xb[i];
-}
-
-static YAMI_INLINE void yami_internal_vec_addc(f32 *out, const f32 *x,
-                                               const f32 c, const usize n) noexcept {
-    for (usize i = 0; i < n; ++i)
-        out[i] = x[i] + c;
-}
-
 // When performing vector operations on a tensor (such as add, multiply...) there are two possibilities:
 //  - the last dims are equal                               --> sum over two equal tensors with size N
 //  - the last dim of one tensor is 1 and the other is > 1  --> sum a constant to a tensor
@@ -822,24 +861,6 @@ yami_tensor *yami_addc(yami_ctx *ctx, yami_tensor *x,
     yami_tensor *res = in_place ? x : yami_new_like(x);
     yami_internal_vec_addc(res->data, x->data, c, x->ne);
     return res;
-}
-
-static YAMI_INLINE void yami_internal_vec_sub(f32 *out, const f32 *xa,
-                                              const f32 *xb, const usize n) noexcept {
-    for (usize i = 0; i < n; ++i)
-        out[i] = xa[i] - xb[i];
-}
-
-static YAMI_INLINE void yami_internal_vec_subc(f32 *out, const f32 *x,
-                                          const f32 c, const usize n) noexcept {
-    for (usize i = 0; i < n; ++i)
-        out[i] = x[i] - c;
-}
-
-static YAMI_INLINE void yami_internal_c_vec_sub(f32 *out, const f32 c,
-                                                const f32 *x, const usize n) noexcept {
-    for (usize i = 0; i < n; ++i)
-        out[i] = c - x[i];
 }
 
 yami_tensor *yami_sub(yami_ctx *ctx, yami_tensor *xa,
@@ -896,18 +917,6 @@ yami_tensor *yami_subc(yami_ctx *ctx, yami_tensor *x,
     return res;
 }
 
-static YAMI_INLINE void yami_internal_vec_mul(f32 *out, const f32 *xa,
-                                              const f32 *xb, const usize n) noexcept {
-    for (usize i = 0; i < n; ++i)
-        out[i] = xa[i] * xb[i];
-}
-
-static YAMI_INLINE void yami_internal_vec_mulc(f32 *out, const f32 *x,
-                                               const f32 c, const usize n) noexcept {
-    for (usize i = 0; i < n; ++i)
-        out[i] = x[i] * c;
-}
-
 yami_tensor *yami_mul(yami_ctx *ctx, yami_tensor *xa,
                       const yami_tensor *xb, const bool in_place) noexcept {
     yami_tensor *res;
@@ -954,24 +963,6 @@ yami_tensor *yami_mulc(yami_ctx *ctx, yami_tensor *x,
     yami_tensor *res = in_place ? x : yami_new_like(x);
     yami_internal_vec_mulc(res->data, x->data, c, res->ne);
     return res;
-}
-
-static YAMI_INLINE void yami_internal_vec_div(f32 *out, const f32 *xa,
-                                              const f32 *xb, const usize n) noexcept {
-    for (usize i = 0; i < n; ++i)
-        out[i] = xa[i] / xb[i];
-}
-
-static YAMI_INLINE void yami_internal_vec_divc(f32 *out, const f32 *x,
-                                               const f32 c, const usize n) noexcept {
-    for (usize i = 0; i < n; ++i)
-        out[i] = x[i] / c;
-}
-
-static YAMI_INLINE void yami_internal_c_vec_div(f32 *out, const f32 c,
-                                                const f32 *x, const usize n) noexcept {
-    for (usize i = 0; i < n; ++i)
-        out[i] = c / x[i];
 }
 
 yami_tensor *yami_div(yami_ctx *ctx, yami_tensor *xa,

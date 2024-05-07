@@ -46,9 +46,9 @@ using f32x8 = __m256;
 
 // ============================================== Ukernel ==============================================
 static YAMI_INLINE void yami_ukernel_8x8_f32(const usize k,
-                                              const f32 *__restrict a,
-                                              const f32 *__restrict b,
-                                              f32 *__restrict c, const usize stride_c) noexcept {
+                                             const f32 *__restrict a,
+                                             const f32 *__restrict b,
+                                             f32 *__restrict c, const usize stride_c) noexcept {
     f32x8 gamma_0 = _mm256_loadu_ps(&c[0 * stride_c]);
     f32x8 gamma_1 = _mm256_loadu_ps(&c[1 * stride_c]);
     f32x8 gamma_2 = _mm256_loadu_ps(&c[2 * stride_c]);
@@ -190,10 +190,11 @@ void yami_gevm_f32(const usize n, const usize k,
                    const f32 *__restrict b, const usize stride_b,
                    f32 *__restrict c) noexcept {
 
+    const usize jb = (n / 8) * 8;
+
     for (usize p = 0; p < k; ++p) {
         const f32x8 alpha_p = _mm256_broadcast_ss(&a[p]);
 
-        const usize jb = (n / 8) * 8;
         for (usize j = 0; j < jb; j += 8) {
             f32x8 gamma_j = _mm256_loadu_ps(&c[j]);
             f32x8 beta_pj = _mm256_loadu_ps(&b[p * stride_b + j]);
