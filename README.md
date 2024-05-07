@@ -41,8 +41,8 @@ gain significant performance boost
 - ~~Remove the `extended_dim` abstraction, it's useless~~ 
 - ~~Switch to a multiple arenas scheme where each arena has its own lifetime~~
 - ~~Add a `contiguous` flag~~
-- Use a decent GEMM, it's the main point of all this...
-- Remove `pthread`, use `OpenMP`
+- ~~Use a decent GEMM, it's the main point of all this...~~
+- ~~Remove `pthread`, use `OpenMP`~~
 - _`YAMI_MAX_DIMS` should be defined at compile-time (this is the trickiest of them all,
 it has to do with recursive macros like `yami_for` and `yami_offset` and it's also used indirectly in functions
 that operate along axis like `yami_sum`. I would not bother with this for the time being)._

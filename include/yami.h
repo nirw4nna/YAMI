@@ -30,6 +30,8 @@
 #   define YAMI_LOG_DEBUG(format, ...)  ((void) 0)
 #endif
 
+#define YAMI_UNUSED(x) ((void) (x))
+
 #if defined(__GNUC__)
 // A 'strictly pure' function is a function whose return value doesn't depend on the global state of the program,
 // this means that it must not access global variables subject to change or access parameters passed by pointer
@@ -238,8 +240,7 @@ extern "C" {
     // =========================== Tensor Operations ==========================
     extern yami_tensor *yami_matmul(yami_ctx *ctx,
                                     const yami_tensor *__restrict xa,
-                                    const yami_tensor *__restrict xb,
-                                    yami_tensor *__restrict res = nullptr) noexcept;
+                                    const yami_tensor *__restrict xb) noexcept;
     extern yami_tensor *yami_add(yami_ctx *ctx,
                                  yami_tensor *xa,
                                  const yami_tensor *xb,

@@ -1,9 +1,9 @@
-#TESTS_TARGETS = tests/test_quantize
+#TESTS_TARGETS = tests/test_blas
 MODELS = gpt2 llama
 
 CXX			=	g++
 CXXFLAGS	=	-std=c++17 -I./include/ -Wall -Wextra -Wshadow -Wformat -Wnoexcept -Wcast-qual -Wunused -Wdouble-promotion \
- 				-Wlogical-op -Wcast-align -fno-exceptions -fno-rtti -pthread
+ 				-Wlogical-op -Wcast-align -fno-exceptions -fno-rtti -fopenmp
 LDFLAGS		=	-lm
 
 UNAME_M	=	$(shell uname -m)
@@ -34,10 +34,10 @@ $(info )
 .PHONY: clean pyyami $(MODELS)
 
 clean:
-	rm -rf *.o *.so $(MODELS) $(TESTS_TARGETS)
+	rm -rf *.o *.so $(MODELS)
 
-pyyami: src/yami.cpp include/yami.h
-	$(CXX) $(CXXFLAGS) -fPIC -shared $< -o yami.so
+pyyami: src/yami.cpp include/yami.h yami_blas.o
+	$(CXX) $(CXXFLAGS) -fPIC -shared $< -o yami.so yami_blas.o
 
 #test: $(TESTS_TARGETS)
 #	@fail=0; \
@@ -66,8 +66,11 @@ yami.o: src/yami.cpp include/yami.h
 yami_utils.o: src/yami_utils.cpp include/yami_utils.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-gpt2: models/gpt2.cpp yami.o yami_utils.o
-	$(CXX) $(CXXFLAGS) $< -o $@ yami.o yami_utils.o $(LDFLAGS)
+yami_blas.o: src/yami_blas.cpp include/yami_blas.h
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-llama: models/llama.cpp yami.o yami_utils.o
-	$(CXX) $(CXXFLAGS) $< -o $@ yami.o yami_utils.o $(LDFLAGS)
+gpt2: models/gpt2.cpp yami.o yami_utils.o yami_blas.o
+	$(CXX) $(CXXFLAGS) $< -o $@ yami.o yami_utils.o yami_blas.o $(LDFLAGS)
+
+llama: models/llama.cpp yami.o yami_utils.o yami_blas.o
+	$(CXX) $(CXXFLAGS) $< -o $@ yami.o yami_utils.o yami_blas.o $(LDFLAGS)

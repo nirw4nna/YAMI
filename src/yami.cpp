@@ -2,15 +2,11 @@
 #include <cstring>
 #include <cmath>
 #include <cstdarg>
-#include <pthread.h>
 #include <sys/sysinfo.h>
-#include <atomic>
+#include "yami_blas.h"
 
-#if defined(__AVX2__)
-#   include <immintrin.h>
-#endif
-
-
+#define YAMI_ENTER_PRIVATE_SCOPE(CTX)   const yami_scope __old_scope = (CTX)->scope; (CTX)->scope = PRIVATE; yami_clear_ctx((CTX))
+#define YAMI_EXIT_PRIVATE_SCOPE(CTX)    (CTX)->scope = __old_scope
 #define YAMI_TENSOR_DIMS_0(PTR) const usize d0_##PTR = (PTR)->dim[0]
 
 #define YAMI_TENSOR_DIMS_1(PTR) YAMI_TENSOR_DIMS_0(PTR); \
@@ -37,8 +33,17 @@
 #define YAMI_TENSOR_STRIDES(PTR, n) YAMI_TENSOR_STRIDES_##n(PTR)
 #define YAMI_TENSOR_FIELDS(PTR, n)  YAMI_TENSOR_DIMS(PTR, n); YAMI_TENSOR_STRIDES(PTR, n)
 
-#define YAMI_ENTER_PRIVATE_SCOPE(CTX)   const yami_scope __old_scope = (CTX)->scope; (CTX)->scope = PRIVATE; yami_clear_ctx((CTX))
-#define YAMI_EXIT_PRIVATE_SCOPE(CTX)    (CTX)->scope = __old_scope
+#define yami_offset_0(PTR) ((d0) * (d0_stride_##PTR))
+#define yami_offset_1(PTR) ((yami_offset_0(PTR)) + ((d1) * (d1_stride_##PTR)))
+#define yami_offset_2(PTR) ((yami_offset_1(PTR)) + ((d2) * (d2_stride_##PTR)))
+#define yami_offset_3(PTR) ((yami_offset_2(PTR)) + ((d3) * (d3_stride_##PTR)))
+#define yami_offset(PTR, n) yami_offset_##n(PTR)
+
+#define yami_broadcast_offset_0(PTR) (((d0) % (d0_##PTR)) * (d0_stride_##PTR))
+#define yami_broadcast_offset_1(PTR) ((yami_broadcast_offset_0(PTR)) + (((d1) % (d1_##PTR)) * (d1_stride_##PTR)))
+#define yami_broadcast_offset_2(PTR) ((yami_broadcast_offset_1(PTR)) + (((d2) % (d2_##PTR)) * (d2_stride_##PTR)))
+#define yami_broadcast_offset_3(PTR) ((yami_broadcast_offset_2(PTR)) + (((d3) % (d3_##PTR)) * (d3_stride_##PTR)))
+#define yami_broadcast_offset(PTR, n) yami_broadcast_offset_##n(PTR)
 
 #define yami_for_0(PTR) for (usize d0 = 0; d0 < (d0_##PTR); ++d0)
 
@@ -53,18 +58,6 @@
 
 #define yami_for(PTR, n) yami_for_##n(PTR)
 
-#define yami_offset_0(PTR) ((d0) * (d0_stride_##PTR))
-#define yami_offset_1(PTR) ((yami_offset_0(PTR)) + ((d1) * (d1_stride_##PTR)))
-#define yami_offset_2(PTR) ((yami_offset_1(PTR)) + ((d2) * (d2_stride_##PTR)))
-#define yami_offset_3(PTR) ((yami_offset_2(PTR)) + ((d3) * (d3_stride_##PTR)))
-#define yami_offset(PTR, n) yami_offset_##n(PTR)
-
-#define yami_broadcast_offset_0(PTR) (((d0) % (d0_##PTR)) * (d0_stride_##PTR))
-#define yami_broadcast_offset_1(PTR) ((yami_broadcast_offset_0(PTR)) + (((d1) % (d1_##PTR)) * (d1_stride_##PTR)))
-#define yami_broadcast_offset_2(PTR) ((yami_broadcast_offset_1(PTR)) + (((d2) % (d2_##PTR)) * (d2_stride_##PTR)))
-#define yami_broadcast_offset_3(PTR) ((yami_broadcast_offset_2(PTR)) + (((d3) % (d3_##PTR)) * (d3_stride_##PTR)))
-#define yami_broadcast_offset(PTR, n) yami_broadcast_offset_##n(PTR)
-
 
 // Create a new 'shape' for the given tensor. A shape is always YAMI_MAX_DIMS elements otherwise the indexes returned by
 // yami_tensor_dim will not work on the shape copy. To make the process of using this copy less clunky yami_shape can be used,
@@ -73,43 +66,13 @@
 #define yami_shape(PTR)     (&(PTR##_shape)[yami_tensor_dim(PTR, 0)])
 
 #define yami_new_like(PTR)  (yami_new_tensor(ctx, (PTR)->n_dim, &(PTR)->dim[yami_tensor_dim(PTR, 0)]))
-
+#define yami_set_zero(PTR)  (memset((PTR)->data, 0, (PTR)->ne * sizeof(f32)))
 #define yami_scope_buffer() (ctx->buffers[ctx->scope])
 
 #define YAMI_RANGE_START    ((int) 0)
 #define YAMI_RANGE_STOP     ((int) 1)
-#define YAMI_BLOCK_SIZE     ((usize) 32)
 
 using yami_dim_range = usize[YAMI_MAX_DIMS][2];
-
-enum yami_op : u8 {
-    YAMI_OP_MATMUL,
-    YAMI_OP_DONE,
-};
-
-struct yami_task {
-    const yami_tensor *xa;
-    const yami_tensor *xb;
-    yami_tensor *res;
-    yami_dim_range ranges;
-    // Counter shared between all the workers, used to determine whether they have finished or not.
-    std::atomic_int *progress_counter;
-    yami_op op;
-};
-
-struct yami_worker {
-    pthread_t id;
-    // The current implementation uses a spinlock in the "father" thread (0th thread) to wait for its "children" completion
-    // and a condition variable in said children to wait for work.
-    // Performance-wise this is a suboptimal choice as there will inevitably be some OS-related delay between when the father signals
-    // and the child actually receives that signal. This is not the case with a spinlock however the spinlock will cause
-    // higher utilization (all the cores will be maxed-out until the inference is done) since the children are created only once
-    // and are utilized only (at least for now) to speed-up matmuls which means they are quite often idle.
-    bool has_work;
-    pthread_cond_t cond;
-    pthread_mutex_t mtx;
-    yami_task task;
-};
 
 struct yami_obj {
     usize offset;
@@ -141,7 +104,6 @@ struct yami_mem_buffer {
 // The GLOBAL and LOCAL buffers instead are completely user-managed.
 struct yami_ctx {
     yami_mem_buffer *buffers[YAMI_SCOPES];
-    yami_worker *workers;
     int n_workers;
     yami_scope scope;
 };
@@ -191,164 +153,6 @@ static yami_tensor *yami_alloc_result(yami_ctx *ctx, const yami_tensor *xa,
 // ==============================================================================================================
 // TODO: move all internal math functions like `yami_internal_vec_sub` here
 
-static YAMI_INLINE void yami_internal_matmul_naive(f32 *__restrict out, const f32 *__restrict xa,
-                                                   const f32 *__restrict xb, const usize n_rows_a,
-                                                   const usize n_cols_a, const usize n_cols_b,
-                                                   const usize a_row_start = 0, usize a_row_stop = 0,
-                                                   const usize b_col_start = 0, usize b_col_stop = 0) noexcept {
-    b_col_stop = b_col_stop == 0 ? n_cols_b : YAMI_MIN(b_col_stop, n_cols_b);
-    a_row_stop = a_row_stop == 0 ? n_rows_a : YAMI_MIN(a_row_stop, n_rows_a);
-    for (usize i = a_row_start; i < a_row_stop; ++i) {
-        for (usize k = 0; k < n_cols_a; ++k) {
-            const f32 c_a = xa[i * n_cols_a + k];
-            for (usize j = b_col_start; j < b_col_stop; ++j) {
-                out[i * n_cols_b + j] += c_a * xb[k * n_cols_b + j];
-            }
-        }
-    }
-}
-
-// Some things to keep in mind:
-// - L1 cache is 32KB
-// - L2 cache is 256KB
-// - cache line is 64B
-// - TLB lv1 is 64 entries for 4KB/entry
-// - AVX2
-static YAMI_INLINE void yami_internal_matmul_blocked(f32 *__restrict res, const f32 *__restrict xa,
-                                                     const f32 *__restrict xb, const usize n_rows_a,
-                                                     const usize n_cols_a, const usize n_cols_b,
-                                                     const usize a_row_start = 0, usize a_row_stop = 0,
-                                                     const usize b_col_start = 0, usize b_col_stop = 0) noexcept {
-    // This is the first implementation of what looks like a very efficient GEMM algorithm.
-    // TODO: we have to investigate 2 things:
-    //  - what's the best set of parameters for this algorithm
-    //  - how to find the best set of parameters at runtime (e.g. during init) for a given hardware
-
-    const usize b_size = YAMI_BLOCK_SIZE * sizeof(f32);
-    alignas(32) f32 *packed_a = (f32 *) alloca(b_size);
-    alignas(32) f32 *packed_b = (f32 *) alloca(b_size * YAMI_BLOCK_SIZE);
-    alignas(32) f32 *packed_c = (f32 *) alloca(b_size);
-
-    b_col_stop = b_col_stop == 0 ? n_cols_b : YAMI_MIN(b_col_stop, n_cols_b);
-    a_row_stop = a_row_stop == 0 ? n_rows_a : YAMI_MIN(a_row_stop, n_rows_a);
-    for (usize bj = b_col_start; bj < b_col_stop; bj += YAMI_BLOCK_SIZE) {
-
-        const usize max_bj = YAMI_MIN(bj + YAMI_BLOCK_SIZE, b_col_stop);
-
-        for (usize bi = 0; bi < n_cols_a; bi += YAMI_BLOCK_SIZE) {
-
-            const usize max_bi = YAMI_MIN(bi + YAMI_BLOCK_SIZE, n_cols_a);
-
-            const usize block_rows = max_bi - bi;
-            const usize block_cols = max_bj - bj;
-            // Fill the buffer with 0s and copy only those values that are part of the YAMI_BLOCK_SIZE x YAMI_BLOCK_SIZE matrix
-            memset(packed_b, 0, b_size * YAMI_BLOCK_SIZE);
-            for (usize ib = 0; ib < block_cols; ++ib) {
-                for (usize jb = 0; jb < block_rows; ++jb) {
-                    // pack B in column-major order
-                    // todo: optimize!
-                    packed_b[ib * YAMI_BLOCK_SIZE + jb] = xb[(bi + jb) * n_cols_b + (bj + ib)];
-                }
-            }
-
-            // Take the given subset of rows of A from b_r_start to b_r_stop and multiply by pack_b
-            for (usize i = a_row_start; i < a_row_stop; ++i) {
-                memset(packed_a, 0, b_size);
-                for (usize tmp = bi; tmp < max_bi; ++tmp) packed_a[tmp - bi] = xa[i*n_cols_a + tmp];
-
-                // Block multiply
-                for (usize kk = 0; kk < YAMI_BLOCK_SIZE; ++kk) {
-                    f32 acc = 0.f;
-                    for (usize jj = 0; jj < YAMI_BLOCK_SIZE; ++jj) {
-                        // todo: optimize!
-                        acc += packed_a[jj] * packed_b[kk * YAMI_BLOCK_SIZE + jj];
-                    }
-                    packed_c[kk] = acc;
-                }
-
-                for (usize tmp = bj; tmp < max_bj; ++tmp) {
-                    res[i*n_cols_b + tmp] += packed_c[tmp - bj];
-                }
-
-            }
-        }
-    }
-}
-
-static void yami_internal_matmul(const yami_tensor *xa, const yami_tensor *xb,
-                                 yami_tensor *res, const yami_dim_range ranges) noexcept {
-    YAMI_TENSOR_FIELDS(xa, 1);
-    YAMI_TENSOR_FIELDS(xb, 1);
-    YAMI_TENSOR_STRIDES(res, 1);
-    const usize d2_xa = xa->dim[2];
-    const usize d3_xa = xa->dim[3];
-    const usize d3_xb = xb->dim[3];
-
-    const usize d2_start = ranges[2][YAMI_RANGE_START], d2_stop = ranges[2][YAMI_RANGE_STOP];
-    const usize d3_start = ranges[3][YAMI_RANGE_START], d3_stop = ranges[3][YAMI_RANGE_STOP];
-
-    const bool use_naive = (d2_stop - d2_start) < YAMI_BLOCK_SIZE &&
-                           (d3_stop - d3_start) < YAMI_BLOCK_SIZE &&
-                           d2_xa < YAMI_BLOCK_SIZE;
-    for (usize d0 = ranges[0][YAMI_RANGE_START]; d0 < ranges[0][YAMI_RANGE_STOP]; ++d0) {
-        for (usize d1 = ranges[1][YAMI_RANGE_START]; d1 < ranges[1][YAMI_RANGE_STOP]; ++d1) {
-            f32 *res_data = &res->data[yami_offset(res, 1)];
-            const f32 *xa_data = &xa->data[yami_broadcast_offset(xa, 1)];
-            const f32 *xb_data = &xb->data[yami_broadcast_offset(xb, 1)];
-
-            if (use_naive) yami_internal_matmul_naive(res_data, xa_data, xb_data, d2_xa, d3_xa,
-                                                      d3_xb, d2_start, d2_stop,
-                                                      d3_start, d3_stop);
-            else yami_internal_matmul_blocked(res_data, xa_data,
-                                              xb_data, d2_xa, d3_xa,
-                                              d3_xb, d2_start, d2_stop,
-                                              d3_start, d3_stop);
-        }
-    }
-}
-
-static void *yami_worker_thread(void *arg) noexcept {
-    yami_worker *self = (yami_worker *) arg;
-
-    yami_task *work;
-    bool exit = false;
-    while (true) {
-        pthread_mutex_lock(&self->mtx);
-        while (!self->has_work)
-            pthread_cond_wait(&self->cond, &self->mtx);
-
-        self->has_work = false;
-        pthread_mutex_unlock(&self->mtx);
-
-        // We don't need to hold the lock as the master thread will wait for completion before setting another task
-        work = &self->task;
-
-        switch (work->op) {
-            case YAMI_OP_MATMUL: {
-                const yami_tensor *xa = work->xa;
-                const yami_tensor *xb = work->xb;
-                yami_tensor *res = work->res;
-                yami_internal_matmul(xa, xb, res, work->ranges);
-                work->progress_counter->fetch_add(1);
-                break;
-            }
-            case YAMI_OP_DONE: {
-                exit = true;
-                break;
-            }
-            default: {
-                YAMI_LOG_ERR("unknown op=%d", work->op);
-                break;
-            }
-        }
-
-        if (exit)
-            break;
-    }
-
-    pthread_exit(nullptr);
-}
-
 static yami_mem_buffer *yami_buffer_alloc(const usize nb) noexcept {
     const usize buff_size = YAMI_ALIGN(nb + sizeof(yami_mem_buffer), YAMI_PAGE_SIZE);
     
@@ -367,6 +171,9 @@ yami_ctx *yami_init(const yami_init_params params) noexcept {
 
     yami_ctx *ctx = (yami_ctx *) malloc(sizeof(yami_ctx));
     YAMI_ASSERT(ctx != nullptr);
+
+    // Set the default scope to GLOBAL
+    ctx->scope = GLOBAL;
 
     usize scope_nb[YAMI_SCOPES];
     if (params.scratch_nb > 0) {
@@ -390,31 +197,7 @@ yami_ctx *yami_init(const yami_init_params params) noexcept {
         n_workers = n_cpus;
     }
 
-    // Create the Yami workforce!
     ctx->n_workers = n_workers;
-
-    if (n_workers > 1) {
-        ctx->workers = (yami_worker *) malloc((n_workers - 1) * sizeof(yami_worker));
-        for (int i = 1; i < n_workers; ++i) {
-            yami_worker *worker = &ctx->workers[i-1];
-            pthread_mutex_init(&worker->mtx, nullptr);
-            pthread_cond_init(&worker->cond, nullptr);
-            worker->has_work = false;
-            pthread_create(&worker->id, nullptr, yami_worker_thread, worker);
-
-            // Set affinity
-            cpu_set_t cpu_set{};
-            CPU_ZERO(&cpu_set);
-            CPU_SET(i, &cpu_set);
-            pthread_setaffinity_np(worker->id, sizeof(cpu_set_t), &cpu_set);
-        }
-    }
-
-    // Set affinity for the main worker
-    cpu_set_t cpu_set{};
-    CPU_ZERO(&cpu_set);
-    CPU_SET(0, &cpu_set);
-    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpu_set);
 
     YAMI_LOG_INFO("created new context %p: workers=%d GLOBAL=%ldMB LOCAL=%ldMB PRIVATE=%ldMB",
                   (void *) ctx, ctx->n_workers,
@@ -437,28 +220,6 @@ void yami_free(yami_ctx *ctx) noexcept {
     free(ctx->buffers[GLOBAL]);
     free(ctx->buffers[LOCAL]);
     free(ctx->buffers[PRIVATE]);
-
-    if (ctx->n_workers > 1) {
-        for (int i = 1; i < ctx->n_workers; ++i) {
-            yami_worker *worker = &ctx->workers[i - 1];
-            pthread_mutex_lock(&worker->mtx);
-
-            worker->task.op = YAMI_OP_DONE;
-            worker->has_work = true;
-
-            pthread_cond_signal(&worker->cond);
-            pthread_mutex_unlock(&worker->mtx);
-        }
-
-        for (int i = 1; i < ctx->n_workers; ++i) {
-            yami_worker *worker = &ctx->workers[i - 1];
-            pthread_join(worker->id, nullptr);
-            pthread_mutex_destroy(&worker->mtx);
-            pthread_cond_destroy(&worker->cond);
-        }
-
-        free(ctx->workers);
-    }
 
     free(ctx);
 }
@@ -550,7 +311,6 @@ yami_tensor *yami_new_tensor(yami_ctx *ctx, const int n_dim,
     new_tensor->contiguous = true;
     if (data == nullptr) {
         new_tensor->data = (f32 *) (new_tensor + 1);
-        memset(new_tensor->data, 0, ne * sizeof(f32));
     } else {
         new_tensor->data = (f32 *) data;
     }
@@ -683,7 +443,7 @@ yami_tensor *yami_contiguous(yami_ctx *ctx, yami_tensor *x) noexcept {
     if (x->contiguous)
         return x;
 
-    yami_tensor *res = yami_new_tensor(ctx, x->n_dim, x->dim);
+    yami_tensor *res = yami_new_like(x);
 
     YAMI_TENSOR_FIELDS(x, 3);
     YAMI_TENSOR_STRIDES(res, 3);
@@ -930,11 +690,10 @@ void yami_copy(const yami_tensor *x, yami_tensor *res) noexcept {
 }
 
 yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
-                         const yami_tensor *__restrict xb,
-                         yami_tensor *__restrict res) noexcept {
+                         const yami_tensor *__restrict xb) noexcept {
     // Verify that the two matrices are at least 2-dimensional
     if (xa->n_dim < 2 || xb->n_dim < 2) {
-        YAMI_LOG_FATAL("too few dimensions, use yami_mul for 1D tensor multiply");
+        YAMI_LOG_FATAL("too few dimensions, use yami_mul to multiply 1D tensors");
     }
 
 //    const f64 start__ = yami_timer();
@@ -946,8 +705,9 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
 
     if (xa_n_cols != xb_n_rows) {
         YAMI_LOG_FATAL("can't multiply (%ld, %ld) by (%ld, %ld)",
-                     xa_n_rows, xa_n_cols,
-                     xb_n_rows, xb_n_cols);
+                       xa_n_rows, xa_n_cols,
+                       xb_n_rows, xb_n_cols
+        );
     }
 
     YAMI_ASSERT(yami_can_broadcast(xa, xb, YAMI_MAX_DIMS - 2));
@@ -959,103 +719,44 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
         res_dim[i] = YAMI_MAX(xa->dim[i], xb->dim[i]);
 
     const int res_n_dim = YAMI_MAX(xa->n_dim, xb->n_dim);
-    res = res == nullptr ? yami_new_tensor(ctx, res_n_dim, &res_dim[YAMI_MAX_DIMS - res_n_dim]) : res;
-    bool match = res->n_dim == res_n_dim;
-    for (int i = 0; i < res_n_dim && match; ++i) {
-        match &= res->dim[yami_tensor_dim(res, 0) + i] == res_dim[YAMI_MAX_DIMS - res_n_dim + i];
-    }
-    YAMI_ASSERT(match);
+    yami_tensor *res = yami_new_tensor(ctx, res_n_dim, &res_dim[YAMI_MAX_DIMS - res_n_dim]);
+    yami_set_zero(res);
 
-    const int n_workers = ctx->n_workers;
+    YAMI_ENTER_PRIVATE_SCOPE(ctx);
+    yami_mem_buffer *work_buff = yami_scope_buffer();
 
-    YAMI_TENSOR_DIMS(res, 3);
+    YAMI_TENSOR_FIELDS(xa, 3);
+    YAMI_TENSOR_FIELDS(xb, 3);
+    YAMI_TENSOR_FIELDS(res, 2);
+    YAMI_UNUSED(d2_xb), YAMI_UNUSED(d2_res);
+    YAMI_UNUSED(d3_stride_xa), YAMI_UNUSED(d3_stride_xb);
 
-//    yami_dim_range ranges[12];
-    yami_dim_range *ranges = (yami_dim_range *) alloca(n_workers * sizeof(yami_dim_range));
-    // Initialize all the ranges
-    for (int i = 0; i < n_workers; ++i) {
-        ranges[i][0][YAMI_RANGE_START] = 0, ranges[i][0][YAMI_RANGE_STOP] = d0_res;
-        ranges[i][1][YAMI_RANGE_START] = 0, ranges[i][1][YAMI_RANGE_STOP] = d1_res;
-        ranges[i][2][YAMI_RANGE_START] = 0, ranges[i][2][YAMI_RANGE_STOP] = d2_res;
-        ranges[i][3][YAMI_RANGE_START] = 0, ranges[i][3][YAMI_RANGE_STOP] = d3_res;
-    }
+    for (usize d0 = 0; d0 < d0_res; ++d0) {
+        for (usize d1 = 0; d1 < d1_res; ++d1) {
+            // TODO: handle all the supported dtypes
+            f32 *__restrict res_data = &res->data[yami_offset(res, 1)];
+            const f32 *__restrict xa_data = &xa->data[yami_broadcast_offset(xa, 1)];
+            const f32 *__restrict xb_data = &xb->data[yami_broadcast_offset(xb, 1)];
 
-    std::atomic_int progress(1);
-    int w = 0;
-    // If one of the batch dimensions is >= than the number of workers, split on that dimension.
-    if (d0_res >= (usize) n_workers) {
-        // Todo: collapse two branches
-        const usize n = d0_res / n_workers;
-        for (usize ni = 0; ni < n; ++ni) {
-            const usize start = ni * n, stop = ni != n - 1 ? YAMI_MIN(ni * n + n, d0_res) : d0_res;
-            ranges[w][0][YAMI_RANGE_START] = start, ranges[w][0][YAMI_RANGE_STOP] = stop;
-            w++;
-        }
-    } else if (d1_res >= (usize) n_workers) {
-        const usize n = d1_res / n_workers;
-        for (usize ni = 0; ni < n; ++ni) {
-            const usize start = ni * n, stop = ni != n - 1 ? YAMI_MIN(ni * n + n, d1_res) : d1_res;
-            ranges[w][1][YAMI_RANGE_START] = start, ranges[w][1][YAMI_RANGE_STOP] = stop;
-            w++;
-        }
-    } else {
-        // 2D partitioning algorithm:
-        // 1. define a grid of (tc x tr) threads
-        // 2. compute mi = n_rows_a / tr and nj = n_cols_b / tc
-        // 3. partition C in 2D such that Cij is a (mi x nj) matrix
-        // 4. partition A along the rows such that Ai is a (mi x k) matrix
-        // 5. partition B along the columns such that Bi is a (k x nj) matrix
-        // 6. compute Cij += Ai * Bj on each thread
-
-        // Todo: these must be defined in the context
-        const int tc = 12, tr = 1;
-
-        const usize mi = xa_n_rows >= tr ? (xa_n_rows / tr) : 1;
-        const usize nj = xb_n_cols >= tc ? (xb_n_cols / tc) : 1;
-
-        for (usize nr = 0; nr < tr; ++nr) {
-            for (usize nc = 0; nc < tc; ++nc) {
-                const usize start_r = nr * mi, stop_r = nr != (usize) tr - 1 ? YAMI_MIN(start_r + mi, d2_res) : d2_res;
-                const usize start_c = nc * nj, stop_c = nc != (usize) tc - 1 ? YAMI_MIN(start_c + nj, d3_res) : d3_res;
-                ranges[w][2][YAMI_RANGE_START] = start_r,  ranges[w][2][YAMI_RANGE_STOP] = stop_r;
-                ranges[w][3][YAMI_RANGE_START] = start_c,  ranges[w][3][YAMI_RANGE_STOP] = stop_c;
-                w++;
+            // MR = 1
+            if (d2_xa == 1) {
+                yami_gevm_f32(d3_xb, d3_xa,
+                              xa_data,
+                              xb_data, d2_stride_xb,
+                              res_data
+                );
+            } else {
+                yami_gemm_f32(d2_xa, d3_xb, d3_xa,
+                              xa_data, d2_stride_xa,
+                              xb_data, d2_stride_xb,
+                              res_data, d2_stride_res,
+                              (byte *) work_buff + sizeof(yami_mem_buffer)
+                );
             }
         }
     }
-    // Enqueue tasks for the workers
-    for (int i = 1; i < w; ++i) {
-        yami_worker *worker = &ctx->workers[i-1];
-        pthread_mutex_lock(&worker->mtx);
 
-        yami_task *t = &worker->task;
-        t->xa = xa;
-        t->xb = xb;
-        t->res = res;
-        memcpy(t->ranges, ranges[i], sizeof(yami_dim_range));
-        t->progress_counter = &progress;
-        t->op = YAMI_OP_MATMUL;
-        worker->has_work = true;
-
-        pthread_cond_signal(&worker->cond);
-        pthread_mutex_unlock(&worker->mtx);
-    }
-    // Matrix C0,0 is always processed in the main thread
-    yami_internal_matmul(xa, xb, res, ranges[0]);
-
-    while (progress.load() != w)
-        ;
-
-//    const f64 stop__ = yami_timer();
-//
-//    printf("GEMM,[%ldx%ldx%ldx%ld],[%ldx%ldx%ldx%ld],%.3f\n",
-//           xa->extended_dim[0], xa->extended_dim[1], xa->extended_dim[2], xa->extended_dim[3],
-//           xb->extended_dim[0], xb->extended_dim[1], xb->extended_dim[2], xb->extended_dim[3],
-//           (stop__ - start__) * 1000.);
-//    YAMI_LOG_INFO("[%ld, %ld, %ld, %ld] x [%ld, %ld, %ld, %ld] took %fms",
-//                  xa->extended_dim[0], xa->extended_dim[1], xa->extended_dim[2], xa->extended_dim[3],
-//                  xb->extended_dim[0], xb->extended_dim[1], xb->extended_dim[2], xb->extended_dim[3],
-//                  (stop__ - start__) * 1000.);
+    YAMI_EXIT_PRIVATE_SCOPE(ctx);
 
     return res;
 }
@@ -1361,6 +1062,7 @@ yami_tensor *yami_sum(yami_ctx *ctx, const yami_tensor *x,
     x_shape[dim_idx] = 1;
 
     yami_tensor *res = yami_new_tensor(ctx, x->n_dim, yami_shape(x));
+    yami_set_zero(res);
 
     YAMI_TENSOR_FIELDS(x, 3);
     YAMI_TENSOR_STRIDES(res, 3);
