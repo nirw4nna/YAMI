@@ -15,6 +15,7 @@ from convert_yami import *
 
 # Relative path to the folder obtained by using the 'download.sh' script at https://github.com/facebookresearch/llama
 _MODEL_FOLDER = 'llama-2-7b'
+_EXPORT = False
 
 # Implementation heavily inspired by the great https://github.com/karpathy/llama2.c
 
@@ -221,6 +222,8 @@ class LlamaModel(nn.Module):
         model_dict, params = load_from_meta(_MODEL_FOLDER)
         hparams = LlamaHparams.from_meta(params, model_dict['tok_embeddings.weight'].shape[0])
         weights_to_transpose = ['output.weight']
+        # TODO: `to_ignore` breaks import with mmap
+        # weights_to_ignore = ['rope.freqs']
         for i in range(hparams.n_layers):
             weights_to_transpose.append(f'layers.{i}.attention.wq.weight')
             weights_to_transpose.append(f'layers.{i}.attention.wk.weight')
@@ -230,28 +233,29 @@ class LlamaModel(nn.Module):
             weights_to_transpose.append(f'layers.{i}.feed_forward.w2.weight')
             weights_to_transpose.append(f'layers.{i}.feed_forward.w3.weight')
 
-        export_tokenizer(tokenizer_file, Tokenizer.SP, in_model='tokenizer.model')
+        export_tokenizer(tokenizer_file, Tokenizer.SP, in_model='examples/llama2/tokenizer.model')
         export_model(model_file, Model.LLAMA, model_dict, hparams, to_transpose=weights_to_transpose)
 
 
-
 if __name__ == '__main__':
-    if False:
+    if _EXPORT:
         LlamaModel.export('yami_model.bin', 'yami_tokenizer.bin')
+    else:
+        model_dict, params = load_from_meta(_MODEL_FOLDER)
+        hparams = LlamaHparams.from_meta(params, model_dict['tok_embeddings.weight'].shape[0])
+        model = LlamaModel(hparams)
+        model.load_state_dict(model_dict, strict=False)
+        del model_dict
+        model.eval()
+        print('LLaMA2 model loaded successfully!')
 
-    model_dict, params = load_from_meta(_MODEL_FOLDER)
-    hparams = LlamaHparams.from_meta(params, model_dict['tok_embeddings.weight'].shape[0])
-    model = LlamaModel(hparams)
-    model.load_state_dict(model_dict, strict=False)
-    model.eval()
+        tokenizer = LlamaTokenizer('examples/llama2/tokenizer.model')
+        prompt = 'Building a website can be done in ten simple steps:'
+        print(f'[In]: {prompt}')
+        
+        idx = tokenizer.encode(prompt, bos=True, eos=False)
 
-    tokenizer = LlamaTokenizer('tokenizer.model')
-    prompt = 'Building a website can be done in ten simple steps:'
-    print(f'[In]: {prompt}')
-    
-    idx = tokenizer.encode(prompt, bos=True, eos=False)
-
-    with torch.no_grad():
-        response_tokens = model.generate(torch.tensor(idx, dtype=torch.long)[None, ...], max_new_tokens=200)
-        print(f'[Out]: {tokenizer.decode(response_tokens)}')
+        with torch.no_grad():
+            response_tokens = model.generate(torch.tensor(idx, dtype=torch.long)[None, ...], max_new_tokens=5)
+            print(f'[Out]: {tokenizer.decode(response_tokens[0].tolist())}')
         

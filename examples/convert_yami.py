@@ -59,6 +59,7 @@ _TYPE_MAP = {
     float: ctypes.c_float
 }
 
+
 # Base class for the hparams of all the model, used for export
 @dataclass
 class Hparams(abc.ABC):
@@ -86,15 +87,20 @@ class Model(Enum):
     def __str__(self) -> str:
         return f'{self.name}'
 
-def _map_location(storage, location):
-    return storage
 
-def load_from_meta(checkpoint_folder: str):
-    with open(os.path.join(checkpoint_folder, 'params.json')) as f:
+def load_from_meta(meta_dir: str):
+    # Get the absolute path of the checkpoint folder
+    for dirpath, dirnames, filenames in os.walk(os.getcwd()):
+        if meta_dir in dirnames:
+            meta_path = os.path.join(dirpath, meta_dir)
+    if not meta_path:
+        raise RuntimeError(f'Error loading weights from {meta_dir}: not found in {os.getcwd()}')
+
+    with open(os.path.join(meta_path, 'params.json')) as f:
         params = json.load(f)
     
-    checkpoint_path = list(Path(checkpoint_folder).glob('consolidated.*.pth'))[0]
-    return torch.load(checkpoint_path, map_location=_map_location), params
+    checkpoint_path = list(Path(meta_path).glob('consolidated.*.pth'))[0]
+    return torch.load(checkpoint_path), params
     
 
 def _export_bpe(encoder, vocab, file_handle):
@@ -124,7 +130,7 @@ def _export_sp(in_model, file_handle):
         
         if i == bos_id:
             token = '<s>'
-        if i == eos_id:
+        elif i == eos_id:
             token = '</s>'
 
         token = token.replace('▁', ' ')
@@ -150,7 +156,7 @@ def export_tokenizer(out_file: str, type: Tokenizer,
             _export_bpe(encoder=encoder, vocab=vocab, file_handle=f)   
 
 
-def export_model(out_file: str, model: Model, model_dict, hparams: Hparams, to_transpose=None):
+def export_model(out_file: str, model: Model, model_dict, hparams: Hparams, to_transpose=None, to_ignore=None):
     print(f'Exporting {model} model with {len(model_dict)} tensors to "{out_file}"')
     
     with open(out_file, mode='wb') as f:
@@ -164,13 +170,20 @@ def export_model(out_file: str, model: Model, model_dict, hparams: Hparams, to_t
         # number of tensors
         f.write(struct.pack('<H', len(model_dict)))
         # 106 is the tensor metadata size
+        # TODO: make this more clear!
         offset = len(MODEL_HEAD) + 6 + len(raw_hparams) + len(model_dict) * 106
+        
+        keys_to_remove = set()
         for label in model_dict:
             tensor = model_dict[label]
             print(f'Found new tensor: [ {label} {tensor.shape} {tensor.dtype} ]')
             if to_transpose and any([label.endswith(tt) for tt in to_transpose]):
                 print(f'Tensor {label} will be transposed')
                 tensor = tensor.t()
+            if to_ignore and any([label.endswith(ti) for ti in to_ignore]):
+                print(f'Tensor {label} will be ignored')
+                keys_to_remove.add(label)
+                continue
 
             model_dict[label] = tensor
 
@@ -198,6 +211,9 @@ def export_model(out_file: str, model: Model, model_dict, hparams: Hparams, to_t
             f.write(struct.pack('<Q', offset))
             # Assuming fp32
             offset += len(data) * 4
+
+        for to_remove in keys_to_remove:
+            del model_dict[to_remove]
 
         for label in model_dict:
             tensor = model_dict[label]

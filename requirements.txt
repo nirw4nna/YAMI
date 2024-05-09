@@ -1,7 +1,9 @@
-# Todo: it makes sense to have just one global venv, and not one for every single model
 pytest
 numpy
 torch
 matplotlib
 pandas
 sentencepiece
+transformers
+regex
+requests
