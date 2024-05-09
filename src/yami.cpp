@@ -740,6 +740,11 @@ void yami_copy(const yami_tensor *x, yami_tensor *res) noexcept {
     memcpy(res->data, x->data, res->ne * sizeof(f32));
 }
 
+//static const char *kernel_lookup[2] = {
+//        "GEMM",
+//        "GEVM",
+//};
+
 yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
                          const yami_tensor *__restrict xb) noexcept {
     // Verify that the two matrices are at least 2-dimensional
@@ -794,7 +799,8 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
                 yami_gevm_f32(d3_xb, d3_xa,
                               xa_data,
                               xb_data, d2_stride_xb,
-                              res_data
+                              res_data,
+                              (byte *) work_buff + sizeof(yami_mem_buffer)
                 );
             } else {
                 yami_gemm_f32(d2_xa, d3_xb, d3_xa,
@@ -808,7 +814,13 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
     }
 
     YAMI_EXIT_PRIVATE_SCOPE(ctx);
-
+//    const f64 stop__ = yami_timer();
+//
+//    printf("%s,[%ldx%ldx%ldx%ld],[%ldx%ldx%ldx%ld],%.3f\n",
+//           kernel_lookup[d2_xa == 1],
+//           xa->dim[0], xa->dim[1], xa->dim[2], xa->dim[3],
+//           xb->dim[0], xb->dim[1], xb->dim[2], xb->dim[3],
+//           (stop__ - start__) * 1000.);
     return res;
 }
 

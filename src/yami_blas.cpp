@@ -188,8 +188,43 @@ void yami_gemm_f32(const usize m, const usize n, const usize k,
 void yami_gevm_f32(const usize n, const usize k,
                    const f32 *__restrict a,
                    const f32 *__restrict b, const usize stride_b,
-                   f32 *__restrict c) noexcept {
-
+                   f32 *__restrict c, void *work) noexcept {
+//    f32 *packed_b = (f32 *) work;
+//
+//    for (usize j = 0; j < n; j += NC) {
+//        const usize jb = YAMI_MIN(n - j, NC);
+//
+//        for (usize p = 0; p < k; p += KC) {
+//            const usize pb = YAMI_MIN(k - p, KC);
+//
+//            // Pack B
+//            yami_packB_f32(pb, jb, &b[p * stride_b + j], stride_b, packed_b);
+//
+////            #pragma omp parallel for if (jb >= 6*NR)
+//            for (usize jj = 0; jj < jb; jj += NR) {
+//                const usize jjb = YAMI_MIN(jb - jj, NR);
+//
+//                if (jjb == NR) {
+//                    f32x8 gamma_j = _mm256_loadu_ps(&c[j + jj]);
+//
+//                    for (usize pp = 0; pp < pb; ++pp) {
+//                        const f32x8 beta_jp = _mm256_loadu_ps(&packed_b[(jj * pb) + (pp * NR)]);
+//                        const f32x8 alpha_p = _mm256_broadcast_ss(&a[p + pp]);
+//                        gamma_j = _mm256_fmadd_ps(alpha_p, beta_jp, gamma_j);
+//                    }
+//
+//                    _mm256_storeu_ps(&c[j + jj], gamma_j);
+//                } else {
+//                    for (usize pp = 0; pp < pb; ++pp) {
+//                        for (usize jjj = 0; jjj < jjb; ++jjj) {
+//                            c[j + jj + jjj] += a[p + pp] * packed_b[(jj * pb) + (pp * NR) + jjj];
+//                        }
+//                    }
+//                }
+//            }
+//        }
+//    }
+    YAMI_UNUSED(work);
     const usize jb = (n / 8) * 8;
 
     for (usize p = 0; p < k; ++p) {

@@ -1,10 +1,12 @@
+import os
+os.environ['OMP_NUM_THREADS'] = '1'
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import torch
 import time
 
 import sys
-import os
 
 sys.path.append(f'{os.path.join(os.path.dirname(__file__), "pyyami")}')
 from pyyami import *
@@ -29,25 +31,25 @@ WARMUP = 2
 STEPS = 5
 
 
-def _plot(delays, delay_per_element, delay_pyyami, delay_np, labels):
+def _plot(kernel, delays, delay_per_element, delay_pyyami, delay_np, labels):
     _, (ax) = plt.subplots(2, 2, figsize=(15, 5), tight_layout=True)
 
-    ax[0, 0].bar(labels, delays, label='GEMM Delay', color='green')
+    ax[0, 0].bar(labels, delays, label=f'{kernel} Delay', color='green')
     ax[0, 0].set_xlabel('Shape')
     ax[0, 0].set_ylabel('Delay (ms)')
     ax[0, 0].legend()
 
-    ax[0, 1].bar(labels, delay_per_element, label='GEMM Delay / Size', color='red')
+    ax[0, 1].bar(labels, delay_per_element, label=f'{kernel} Delay / Size', color='red')
     ax[0, 1].set_xlabel('Shape')
     ax[0, 1].set_ylabel('Delay (us)')
     ax[0, 1].legend()
 
-    ax[1, 0].bar(labels, delay_pyyami, label='GEMM Delay PyYAMI', color='blue')
+    ax[1, 0].bar(labels, delay_pyyami, label=f'{kernel} Delay PyYAMI', color='blue')
     ax[1, 0].set_xlabel('Shape')
     ax[1, 0].set_ylabel('Delay (us)')
     ax[1, 0].legend()
 
-    ax[1, 1].bar(labels, delay_np, label='GEMM Delay NumPy', color='orange')
+    ax[1, 1].bar(labels, delay_np, label=f'{kernel} Delay NumPy', color='orange')
     ax[1, 1].set_xlabel('Shape')
     ax[1, 1].set_ylabel('Delay (us)')
     ax[1, 1].legend()
@@ -71,14 +73,17 @@ def _bench(func, *args) -> float:
     for _ in range(WARMUP):
         func(*args)
 
-    start = time.perf_counter_ns()
+    best_latency = float('+inf')
 
     for _ in range(STEPS):
+        start = time.perf_counter()
         func(*args)
+        latency = time.perf_counter() - start
 
-    stop = time.perf_counter_ns()
+        best_latency = latency if latency < best_latency else best_latency
 
-    return round(((stop - start) / 1e6) / STEPS, ndigits=3)
+    # Return the best case latency in milliseconds
+    return round(best_latency * 1e3, ndigits=3)
 
 
 def _print_timings(df, ctx, worst=True):
@@ -102,7 +107,7 @@ def _print_timings(df, ctx, worst=True):
     for d, d_rel, s1, s2 in zip(delays, delay_per_element, shapes_a, shapes_b):
         s1_shape = _shape_arr(s1)
         s2_shape = _shape_arr(s2)
-        # Assume this is a GEMM
+        # Assume this is some flavour of GEMM
         a = torch.rand(s1_shape)
         b = torch.rand(s2_shape)
         a_np = a.numpy()
@@ -124,11 +129,14 @@ def _print_timings(df, ctx, worst=True):
     pd.set_option('display.max_columns', 500)
     pd.set_option('display.max_rows', 500)
     pd.set_option('display.width', 1000)
-    print(f'\n{"Worst" if worst else "Best"} {SHOW_TOP} timings:')
+
+    kernel = df['kernel'].unique()[0]
+
+    print(f'\n{kernel} {"Worst" if worst else "Best"} {SHOW_TOP} timings:')
     print(frame)
 
     if PLOT:
-        _plot(delays, delay_per_element, delays_pyyami, delays_np, labels)
+        _plot(kernel, delays, delay_per_element, delays_pyyami, delays_np, labels)
 
 
 if __name__ == '__main__':

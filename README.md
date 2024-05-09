@@ -13,10 +13,12 @@ Yet Another Machine Inference framework
 - ~~GELU~~
 - ~~GPT-2~~
 - ~~RMSNorm~~
-- >RoPE
+- ~~RoPE~~
 - ~~SwiGLU~~
+- ~~LLaMA 2~~
 - >Optimizations to reach GGML level
-- >LLaMA 2
+- >Quantization
+- >GEMM/GEVM parallel
 
 **Extra:**
 - ~~BPE (C++)~~
@@ -29,42 +31,64 @@ First of, let's clarify the scope of this project: this is not ment to become th
 `YAMI` was born with one simple objective: to become a playground for me to learn more about software optimizations.
 
 - The goal is to provide a fully self-contained, high performance implementation of popular LLMs on x86.
-At least until we get there, it doesn't make sense to waste time thinking about CUDA, Metal, ARM, Rocm or whatever.
+  At least until we get there, it doesn't make sense to waste time thinking about CUDA, Metal, ARM, Rocm or whatever.
 
 - Same goes for the operating system: it doesn't make sense to worry about Windows, macOS or any other OS until there will be
-a good reason to do so
+  a good reason to do so
 
 With this out of the way, let's try and fix some things in order to make this thing worth publishing:
 - ~~Move to `u64` for sizes~~
 - Verify the usefulness (profiling) of in-place operations, with `__restrict` and some vectorization we could probably
-gain significant performance boost
-- ~~Remove the `extended_dim` abstraction, it's useless~~ 
+  gain significant performance boost
+- ~~Remove the `extended_dim` abstraction, it's useless~~
 - ~~Switch to a multiple arenas scheme where each arena has its own lifetime~~
 - ~~Add a `contiguous` flag~~
 - ~~Use a decent GEMM, it's the main point of all this...~~
 - ~~Remove `pthread`, use `OpenMP`~~
 - _`YAMI_MAX_DIMS` should be defined at compile-time (this is the trickiest of them all,
-it has to do with recursive macros like `yami_for` and `yami_offset` and it's also used indirectly in functions
-that operate along axis like `yami_sum`. I would not bother with this for the time being)._
+  it has to do with recursive macros like `yami_for` and `yami_offset` and it's also used indirectly in functions
+  that operate along axis like `yami_sum`. I would not bother with this for the time being)._
 - I don't like the way scalar/vector types are handled in functions like `yami_div`
 - I don't like the way the indexes are computed in functions like `yami_sum`
 
 ## GPT2
 ### Benchmarks:
 - Pytorch, on my machine, takes something like 75-80 ms to generate a single token
-using multiple threads.
+  using multiple threads.
 - GGML takes something around 35-40 ms to generate a single token without doing anything extra fancy, this is very good
-and also means we can do much better
+  and also means we can do much better
 - Vanilla NumPy takes something around 120-200 ms to generate a single token
 
 ### TODO:
-- Thorough profiling using `perf`
-- Experiment with `OpenMP` for parallelizing 
+- Perf
 
 
 ## LLaMA 2
 ### TODO:
-- Add a script/memo to download the original weights
-- Perf!
-- Benchmark GGML w/ fp32
-- Quantization: Q8_0, Q4_0 
+- Add a script/memo to download the original weights: a CLI tool would be great
+- Perf:
+    - **90%** of the cycles are spent on `yami_gemm` and `yami_gevm` with GEMM taking up for almost all the cache-misses
+      (`yami_packB`). This means that a bigger model did not introduce anything extra in terms of complexity but rather
+      more operations to perform.
+
+## Performance Roadmap
+Main topic:
+- Efficient parallelization with `OpenMP` or `pthread`
+- `GEMM` optimization
+
+Next:
+- Q8, Q4 quantization
+
+Right now, I'd like to experiment a bit further with parallelization using `OpenMP` (and comparing it with `pthread`)
+before diving into quantization and more esoteric stuff.
+
+Another important aspect is to better define the framework we want to use to test performance.
+
+## Comparison w/ GGML
+Tested on my Ryzen 9 3900X w/ 64GB RAM running Linux... using `llama.cpp` commit `dd46dbc7`:
+
+| Model       |    Format     |      GGML       |   YAMI    |
+|-------------|:-------------:|:---------------:|:---------:|
+| GPT-2 Small |     FP32      |       ...       |    ...    |
+| LLaMA2 7B   |     FP32      |    1.1 tok/s    | 0.7 tok/s |
+
