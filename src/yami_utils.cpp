@@ -400,14 +400,14 @@ std::vector<int> yami_llama_tokenizer::encode(const std::string &text, const boo
     for (usize i = 0, counter = 0; i < padded_text.size(); ++counter) {
         const int tok_len = utf8_len(padded_text[i]);
         const size prev = ((size) counter) - 1;
-        const size next = i + tok_len >= padded_text.size() ? -1 : counter + 1; // EOS = -1
+        const size next = i + tok_len >= padded_text.size() ? -1 : (size) counter + 1; // EOS = -1
         symbols.emplace_back(yami_sp_symbol{prev, next, padded_text.substr(i, tok_len)});
 
         i += tok_len;
     }
 
     for (usize i = 1; i < symbols.size(); ++i) {
-        maybe_add(symbols, i - 1, i);
+        maybe_add(symbols, (size) i - 1, (size) i);
     }
 
     while (!agenda_.empty()) {
@@ -454,6 +454,14 @@ std::vector<int> yami_llama_tokenizer::encode(const std::string &text, const boo
 }
 
 std::string yami_llama_tokenizer::decode(const int idx) const noexcept {
+    // If idx corresponds to a char [3, 259) since <unk>=0, <s>=1 and </s>=2
+    // return the printable representation of this char and not the string "<0xxx>"
+    const int char_start_idx = eos_id + 1;
+    if (idx >= char_start_idx && idx <= (eos_id + 256)) {
+        const char tok = (char) (idx - char_start_idx);
+        if (isprint(tok) || isspace(tok))
+            return std::string{tok};
+    }
     return this->id_to_tok_[idx];
 }
 
@@ -643,12 +651,13 @@ static usize parse_mem_arg(const char *const mem_str) noexcept {
 }
 
 void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexcept {
+    // TODO: define some sane defaults that can be used based on the model one wants to load
     settings->n_workers = 1;
     settings->n_tokens = 100;
     settings->temperature = 1.f;
     settings->model_file = "yami_model.bin";
     settings->tokenizer_file = "yami_tokenizer.bin";
-    settings->main_ctx_size = 1024*1024*1024L;
+    settings->main_ctx_size = 3*1024*1024*1024L;
     settings->scratch_ctx_size = 1024*1024*1024L;
     settings->seed = std::random_device()();
     settings->top_k = 0;
@@ -723,8 +732,6 @@ void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexce
     }
 }
 
-// Fixme: I don't really like the idea of allocating a dynamic array this big (50K elements),
-//  a possible solution could be to use alloca + qsort and then simply return the first K elements as a vector.
 std::vector<yami_token> yami_top_k(const f32 *values, const int ne,
                                    const int k) noexcept {
     std::vector<yami_token> res;

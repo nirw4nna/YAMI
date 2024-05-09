@@ -58,9 +58,13 @@ and also means we can do much better
 - Vanilla NumPy takes something around 120-200 ms to generate a single token
 
 ### TODO:
-- There are a couple of things that can be added to `yami_internal_matmul_blocked` to, hopefully,
-speed up the calculations (more care when packing B and better testing with block factor).
-Also, start experimenting with **SIMD** instead of relying solely on the compiler.
 - Thorough profiling using `perf`
+- Experiment with `OpenMP` for parallelizing 
+
 
 ## LLaMA 2
+### TODO:
+- Add a script/memo to download the original weights
+- Perf!
+- Benchmark GGML w/ fp32
+- Quantization: Q8_0, Q4_0 

@@ -21,6 +21,10 @@ else
 	CXXFLAGS	+= -DYAMI_DEBUG -O0 -g
 endif
 
+ifeq ($(MAKECMDGOALS),pyyami)
+	CXXFLAGS	+= -fPIC
+endif
+
 UNAME_S	=	$(shell uname -s)
 
 $(info YAMI build info: )
@@ -37,7 +41,7 @@ clean:
 	rm -rf *.o *.so $(MODELS)
 
 pyyami: src/yami.cpp include/yami.h yami_blas.o
-	$(CXX) $(CXXFLAGS) -fPIC -shared $< -o yami.so yami_blas.o
+	$(CXX) $(CXXFLAGS) -shared $< -o yami.so yami_blas.o
 
 #test: $(TESTS_TARGETS)
 #	@fail=0; \

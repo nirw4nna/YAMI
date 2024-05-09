@@ -237,6 +237,8 @@ yami_ctx *yami_init(const yami_init_params params) noexcept {
         scope_nb[PRIVATE] = (usize) ((f64) params.nb * 0.1);
     }
 
+    // TODO: make sure we allocated enough memory in the private buffer for packed_a and packed_b
+
     ctx->buffers[GLOBAL] = yami_buffer_alloc(scope_nb[GLOBAL]);
     ctx->buffers[LOCAL] = yami_buffer_alloc(scope_nb[LOCAL]);
     ctx->buffers[PRIVATE] = yami_buffer_alloc(scope_nb[PRIVATE]);
@@ -578,21 +580,19 @@ yami_tensor *yami_rope(yami_ctx *, yami_tensor *x,
                        const usize start_idx) noexcept {
     // Todo:
     //  - in_place flag, for now it's always inplace
-    //  - tests
+
     YAMI_TENSOR_FIELDS(x, 3);
 
     YAMI_ASSERT(n <= d3_x);
 
     for (usize d0 = 0; d0 < d0_x; ++d0) {
-        for (usize d1 = 0; d1 < d1_x; ++d1) {
-            // fixme: p is always start_idx + d1??
+        for (usize d1 = (k_mode ? 0 : start_idx); d1 < d1_x; ++d1) {
             const usize p = k_mode ? (start_idx + d1) : d1;
             for (usize d2 = 0; d2 < d2_x; ++d2) {
                 for (usize d3 = 0; d3 < n; d3 += 2) {
-                    // fixme: d3_x and n are always the same?
-                    const f32 theta = std::pow(10'000.f, ((f32) d3) / ((f32) n));
-                    const f32 cos_theta = std::cos(p * theta);
-                    const f32 sin_theta = std::sin(p * theta);
+                    const f32 theta = std::pow(10'000.f, (-((f32) d3)) / ((f32) n));
+                    const f32 cos_theta = std::cos((f32) p * theta);
+                    const f32 sin_theta = std::sin((f32) p * theta);
 
                     const usize offset = yami_offset(x, 3);
                     const f32 x0 = x->data[offset];

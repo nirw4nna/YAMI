@@ -1,10 +1,9 @@
 from random import randint
 
-import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
-
+from typing import Tuple
 import sys
 import os
 
@@ -230,3 +229,53 @@ class TestOps:
                 assert _all_close(my_res.as_np(), targets[j].numpy())
 
             ctx.clear()
+
+    def test_rope(self, ctx: YamiContext):
+        seq_len = 12
+        dim = 128
+        end = 2048
+        freqs = 1. / (10_000. ** (torch.arange(0, dim, 2)[: (dim // 2)] / dim))
+        t = torch.arange(end)
+        freqs = torch.outer(t, freqs)
+        freq_cos = torch.cos(freqs)
+        freq_sin = torch.sin(freqs)
+        
+        def _rope(
+                q: torch.Tensor,
+                k: torch.Tensor,
+        ) -> Tuple[torch.Tensor, torch.Tensor]:
+            def _reshape_freqs(f: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+                ndim = x.ndim
+                assert 0 <= 1 < ndim
+                assert f.shape == (x.shape[1], x.shape[-1])
+                shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
+                return f.view(shape)
+
+            q_r, q_i = q.float().reshape(q.shape[:-1] + (-1, 2)).unbind(-1)
+            k_r, k_i = k.float().reshape(k.shape[:-1] + (-1, 2)).unbind(-1)
+
+            fc = _reshape_freqs(freq_cos[:seq_len], q_r)
+            fs = _reshape_freqs(freq_sin[:seq_len], q_r)
+
+            q_out_r = q_r * fc - q_i * fs
+            q_out_i = q_r * fs + q_i * fc
+            k_out_r = k_r * fc - k_i * fs
+            k_out_i = k_r * fs + k_i * fc
+
+            q_out = torch.stack([q_out_r, q_out_i], dim=-1).flatten(3)
+            k_out = torch.stack([k_out_r, k_out_i], dim=-1).flatten(3)
+
+            return q_out.type_as(q), k_out.type_as(k)
+
+        q_test = _random_ndarray(1, 12, 32, 128)
+        k_test = _random_ndarray(1, 12, 32, 128)
+        # RoPE input: q=[1, 12, 32, 128] k=[1, 12, 32, 128] freq_cos=[12, 64] freq_sin=[12, 64]
+        q_target, k_target = _rope(torch.Tensor(q_test), torch.Tensor(k_test))
+
+        q_yami = YamiTensor.from_np(ctx, 'q_yami', q_test)
+        k_yami = YamiTensor.from_np(ctx, 'k_yami', k_test)
+        q_res = yami_rope(ctx, q_yami, 128, False, 0)
+        k_res = yami_rope(ctx, k_yami, 128, True, 0)
+
+        assert _all_close(q_res.as_np(), q_target.numpy())
+        assert _all_close(k_res.as_np(), k_target.numpy())

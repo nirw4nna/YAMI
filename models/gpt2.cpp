@@ -309,5 +309,5 @@ int main(int argc, char **argv) {
     gpt2.metrics.report();
 
     yami_free(ctx);
-    return 0;
+    return EXIT_SUCCESS;
 }

@@ -197,7 +197,7 @@ void yami_gevm_f32(const usize n, const usize k,
 
         for (usize j = 0; j < jb; j += 8) {
             f32x8 gamma_j = _mm256_loadu_ps(&c[j]);
-            f32x8 beta_pj = _mm256_loadu_ps(&b[p * stride_b + j]);
+            const f32x8 beta_pj = _mm256_loadu_ps(&b[p * stride_b + j]);
             gamma_j = _mm256_fmadd_ps(alpha_p, beta_pj, gamma_j);
 
             _mm256_storeu_ps(&c[j], gamma_j);

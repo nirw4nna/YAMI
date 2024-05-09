@@ -148,7 +148,7 @@ struct yami_sp_bigram {
 };
 
 struct yami_llama_tokenizer {
-    static constexpr int bos_id = 1, eos_id = 2;
+    static constexpr int unk_id = 0, bos_id = 1, eos_id = 2;
 
     yami_llama_tokenizer(std::vector<std::string> &&vocab,
                          const std::vector<f32> &scores);

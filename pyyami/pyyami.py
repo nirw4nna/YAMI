@@ -220,6 +220,14 @@ _lib.yami_lt_mask.argtypes = [yami_ctx_p, yami_tensor_p, c_float, c_size_t]
 _lib.yami_lt_mask.restype = yami_tensor_p
 
 
+def yami_rope(ctx: YamiContext, x: YamiTensor, n: int, k_mode: bool, start_idx: int = 0) -> YamiTensor:
+    return YamiTensor(_lib.yami_rope(ctx, x, n, k_mode, start_idx))
+
+
+_lib.yami_rope.argtypes = [yami_ctx_p, yami_tensor_p, c_size_t, c_bool, c_size_t]
+_lib.yami_rope.restype = yami_tensor_p
+
+
 def yami_split(ctx: YamiContext, x: YamiTensor, n: int, offset: int, dim: int = -1) -> YamiTensor:
     return YamiTensor(_lib.yami_split(ctx, x, n, offset, dim))
 
