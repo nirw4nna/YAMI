@@ -7,6 +7,7 @@ from pathlib import Path
 from tokenizer import LlamaTokenizer
 from typing import Dict, Tuple
 import math
+import time
 
 sys.path.append(str(Path(__file__).parent.parent))
 # Simple trick to import a file from outside the default path.
@@ -246,6 +247,7 @@ if __name__ == '__main__':
         model = LlamaModel(hparams)
         model.load_state_dict(model_dict, strict=False)
         del model_dict
+
         model.eval()
         print('LLaMA2 model loaded successfully!')
 
@@ -255,7 +257,10 @@ if __name__ == '__main__':
         
         idx = tokenizer.encode(prompt, bos=True, eos=False)
 
+        MAX_TOKENS = 5
         with torch.no_grad():
-            response_tokens = model.generate(torch.tensor(idx, dtype=torch.long)[None, ...], max_new_tokens=5)
+            start = time.perf_counter()
+            response_tokens = model.generate(torch.tensor(idx, dtype=torch.long)[None, ...], max_new_tokens=MAX_TOKENS)
+            delay = time.perf_counter() - start
             print(f'[Out]: {tokenizer.decode(response_tokens[0].tolist())}')
-        
+            print(f'Took {round(delay, 2)}s to generate {MAX_TOKENS} tokens ({round(MAX_TOKENS / delay, 2)} tok/s)')        

@@ -92,6 +92,54 @@ struct yami_mem_buffer {
     int n_objs;
 };
 
+// TRACING:
+//  The objective is to be able to track down kernels execution times and other stats like the number of cache misses and the number of times that kernel is called
+//  I still have to figure out if the trace in global or local (meaning it accounts for just one inference loop).
+//
+//  Some key things to keep in mind:
+//      - Each kernel has an ID (name) but to fully identify it you need also the size of the input and output as well as the dtype.
+//      - This feature must be explicitly enabled during compilation (-DYAMI_TRACE?) and must not have an impact on regular runtime performance.
+
+#define YAMI_HASH_NODES 500
+
+enum yami_kernel : u8 {
+    GEMM,
+    GEVM,
+};
+
+enum yami_dtype : u8 {
+    F32,
+};
+
+struct yami_trace {
+
+    yami_trace(const usize in_dim_1[YAMI_MAX_DIMS],
+               const usize in_dim_2[YAMI_MAX_DIMS],
+               const usize out[YAMI_MAX_DIMS],
+               const yami_kernel kernel,
+               const yami_dtype dtype) : kernel(kernel), dtype(dtype) {
+        memcpy(in_dims, in_dim_1, YAMI_MAX_DIMS * sizeof(usize));
+        memcpy(in_dims[1], in_dim_2, YAMI_MAX_DIMS * sizeof(usize));
+        memcpy(out_dim, out, YAMI_MAX_DIMS * sizeof(usize));
+    }
+
+    // For now assume always 2 inputs and 1 output
+    usize in_dims[2][YAMI_MAX_DIMS]{};
+    usize out_dim[YAMI_MAX_DIMS]{};
+
+    usize ref{};
+    usize cycles{}, time_us{};
+    usize cache_ref{}, cache_miss{};
+    yami_kernel kernel;
+    yami_dtype dtype;
+};
+
+struct yami_hash_node {
+    yami_trace el;
+    // Next element to handle multiple elements mapped to the same bucket
+    yami_hash_node *next;
+};
+
 // Each context has YAMI_SCOPES(3) buffers. A buffer is a memory region handled using a linear (arena) allocator, holding objects with the same lifetime.
 // Each new allocation happens in the buffer specified by `scope`, same goes for clearing.
 // The size of the GLOBAL buffer must be specified when initializing the context. This can be used for objects that should be initialized once and never modified
@@ -103,6 +151,7 @@ struct yami_mem_buffer {
 // The PRIVATE buffer is used internally as a scratch buffer to store intermediate results inside certain functions (see: `yami_layer_norm`) and so the user can't use it.
 // The GLOBAL and LOCAL buffers instead are completely user-managed.
 struct yami_ctx {
+    yami_hash_node *traces_table[YAMI_HASH_NODES];
     yami_mem_buffer *buffers[YAMI_SCOPES];
     int n_workers;
     yami_scope scope;
@@ -157,6 +206,65 @@ static YAMI_INLINE void yami_internal_vec_divc(f32 *out, const f32 *x,
 static YAMI_INLINE void yami_internal_c_vec_div(f32 *out, const f32 c,
                                                 const f32 *x, const usize n) noexcept {
     for (usize i = 0; i < n; ++i) out[i] = c / x[i];
+}
+// =============================================================================================================
+
+// ============================================== Trace functions ==============================================
+static int yami_trace_hash(const yami_trace *trace) noexcept {
+    // Very simple djb2-like hashing function
+    int hash = 5381;
+    hash = ((hash << 5) + hash) + trace->kernel;
+    hash = ((hash << 5) + hash) + trace->dtype;
+
+    hash = ((hash << 5) + hash) + (int) trace->in_dims[0][0];
+    hash = ((hash << 5) + hash) + (int) trace->in_dims[0][1];
+    hash = ((hash << 5) + hash) + (int) trace->in_dims[0][2];
+    hash = ((hash << 5) + hash) + (int) trace->in_dims[0][3];
+
+    hash = ((hash << 5) + hash) + (int) trace->in_dims[1][0];
+    hash = ((hash << 5) + hash) + (int) trace->in_dims[1][1];
+    hash = ((hash << 5) + hash) + (int) trace->in_dims[1][2];
+    hash = ((hash << 5) + hash) + (int) trace->in_dims[1][3];
+
+    hash = ((hash << 5) + hash) + (int) trace->out_dim[0];
+    hash = ((hash << 5) + hash) + (int) trace->out_dim[1];
+    hash = ((hash << 5) + hash) + (int) trace->out_dim[2];
+    hash = ((hash << 5) + hash) + (int) trace->out_dim[3];
+
+    return hash % YAMI_HASH_NODES;
+}
+
+// If trace is already there, update the counters otherwise insert a new node.
+static void yami_trace_insert(yami_hash_node *hash_table[YAMI_HASH_NODES], yami_trace *trace) noexcept {
+    const int idx = yami_trace_hash(trace);
+    yami_hash_node *node = hash_table[idx];
+
+    while (node != nullptr) {
+        const yami_trace node_trace = node->el;
+        if (node_trace.kernel == trace->kernel && node_trace.dtype == trace->dtype &&
+            memcmp(node_trace.in_dims[0], trace->in_dims[0], YAMI_MAX_DIMS * sizeof(usize)) == 0 &&
+            memcmp(node_trace.in_dims[1], trace->in_dims[1], YAMI_MAX_DIMS * sizeof(usize)) == 0 &&
+            memcmp(node_trace.out_dim, trace->out_dim, YAMI_MAX_DIMS * sizeof(usize)) == 0) {
+
+            break;
+        }
+        node = node->next;
+    }
+    if (node == nullptr) {
+        // Allocate a new node for this trace
+        node = (yami_hash_node *) malloc(sizeof(yami_hash_node));
+        node->next = hash_table[idx];
+        memcpy(&node->el, trace, sizeof(yami_trace));
+        hash_table[idx] = node;
+    } else {
+        // Update the node with its new trace
+        // TODO: verify that the measurement are properly initialized
+        node->el.ref++;
+        node->el.cycles += trace->cycles;
+        node->el.time_us += trace->time_us;
+        node->el.cache_miss += trace->cache_miss;
+        node->el.cache_ref += trace->cache_ref;
+    }
 }
 // =============================================================================================================
 
@@ -274,6 +382,17 @@ void yami_free(yami_ctx *ctx) noexcept {
     free(ctx->buffers[LOCAL]);
     free(ctx->buffers[PRIVATE]);
 
+    // TODO: only if tracing is enabled
+    yami_hash_node *current, *tmp;
+    for (int i = 0; i < YAMI_HASH_NODES; ++i) {
+        current = ctx->traces_table[i];
+        while (current != nullptr) {
+            tmp = current;
+            current = current->next;
+            free(tmp);
+        }
+    }
+
     free(ctx);
 }
 
@@ -313,6 +432,20 @@ void yami_mem_usage(const yami_ctx *ctx) noexcept {
                   (usize) YAMI_B_TO_MB(buff->nb),
                   ((f64) (used) / (f64) (buff->nb)) * 100.
     );
+}
+
+#define YAMI_TRACE_COLUMNS 8
+
+void yami_print_traces(const yami_ctx *ctx) noexcept {
+    // List all the traces and print them in a neat ASCII table
+    // 1. Gather all data in a linear array
+    // 2. (Optionally) sort
+    // 3. Print
+
+    const int col_widths[YAMI_TRACE_COLUMNS] = {
+        6,
+
+    }
 }
 
 yami_tensor *yami_new_tensor(yami_ctx *ctx, const int n_dim,
@@ -740,11 +873,6 @@ void yami_copy(const yami_tensor *x, yami_tensor *res) noexcept {
     memcpy(res->data, x->data, res->ne * sizeof(f32));
 }
 
-//static const char *kernel_lookup[2] = {
-//        "GEMM",
-//        "GEVM",
-//};
-
 yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
                          const yami_tensor *__restrict xb) noexcept {
     // Verify that the two matrices are at least 2-dimensional
@@ -787,6 +915,14 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
     YAMI_UNUSED(d2_xb), YAMI_UNUSED(d2_res);
     YAMI_UNUSED(d3_stride_xa), YAMI_UNUSED(d3_stride_xb);
 
+    yami_trace trace{xa->dim, xb->dim, res->dim,
+                     d2_xa == 1 ? yami_kernel::GEVM : yami_kernel::GEMM,
+                     yami_dtype::F32
+    };
+    // TODO: cache...
+    trace.time_us = (usize) (yami_timer() * 1e6);
+    // TODO: check if perf_event yields more accurate timings?
+    trace.cycles = __rdtsc();
     for (usize d0 = 0; d0 < d0_res; ++d0) {
         for (usize d1 = 0; d1 < d1_res; ++d1) {
             // TODO: handle all the supported dtypes
@@ -812,6 +948,8 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
             }
         }
     }
+    trace.time_us = (usize) (yami_timer() * 1e6) - trace.time_us;
+    trace.cycles = __rdtsc() - trace.cycles;
 
     YAMI_EXIT_PRIVATE_SCOPE(ctx);
 //    const f64 stop__ = yami_timer();

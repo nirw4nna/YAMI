@@ -19,6 +19,8 @@ Yet Another Machine Inference framework
 - >Optimizations to reach GGML level
 - >Quantization
 - >GEMM/GEVM parallel
+- Utility script to convert a PyTorch model from CLI
+- Move tokenizer and weights to the same file
 
 **Extra:**
 - ~~BPE (C++)~~
@@ -45,9 +47,6 @@ With this out of the way, let's try and fix some things in order to make this th
 - ~~Add a `contiguous` flag~~
 - ~~Use a decent GEMM, it's the main point of all this...~~
 - ~~Remove `pthread`, use `OpenMP`~~
-- _`YAMI_MAX_DIMS` should be defined at compile-time (this is the trickiest of them all,
-  it has to do with recursive macros like `yami_for` and `yami_offset` and it's also used indirectly in functions
-  that operate along axis like `yami_sum`. I would not bother with this for the time being)._
 - I don't like the way scalar/vector types are handled in functions like `yami_div`
 - I don't like the way the indexes are computed in functions like `yami_sum`
 
@@ -62,10 +61,8 @@ With this out of the way, let's try and fix some things in order to make this th
 ### TODO:
 - Perf
 
-
 ## LLaMA 2
 ### TODO:
-- Add a script/memo to download the original weights: a CLI tool would be great
 - Perf:
     - **90%** of the cycles are spent on `yami_gemm` and `yami_gevm` with GEMM taking up for almost all the cache-misses
       (`yami_packB`). This means that a bigger model did not introduce anything extra in terms of complexity but rather
@@ -76,19 +73,16 @@ Main topic:
 - Efficient parallelization with `OpenMP` or `pthread`
 - `GEMM` optimization
 
-Next:
-- Q8, Q4 quantization
-
 Right now, I'd like to experiment a bit further with parallelization using `OpenMP` (and comparing it with `pthread`)
 before diving into quantization and more esoteric stuff.
 
 Another important aspect is to better define the framework we want to use to test performance.
 
 ## Comparison w/ GGML
-Tested on my Ryzen 9 3900X w/ 64GB RAM running Linux... using `llama.cpp` commit `dd46dbc7`:
+Tested on my Ryzen 9 3900X w/ 64GB RAM running Linux `6.6.26-1-MANJARO` using `llama.cpp` commit `dd46dbc7`:
 
-| Model       |    Format     |      GGML       |   YAMI    |
-|-------------|:-------------:|:---------------:|:---------:|
-| GPT-2 Small |     FP32      |       ...       |    ...    |
-| LLaMA2 7B   |     FP32      |    1.1 tok/s    | 0.7 tok/s |
+|     Model     |    Format     |      GGML       |   YAMI    |    PyTorch    |
+|:-------------:|:-------------:|:---------------:|:---------:|:-------------:|
+|  GPT-2 Small  |     FP32      |       ...       |    ...    |      ...      |  
+|   LLaMA2 7B   |     FP32      |    1.1 tok/s    | 0.7 tok/s |   0.5 tok/s   |
 
