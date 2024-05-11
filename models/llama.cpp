@@ -132,6 +132,8 @@ int main(int argc, char **argv) {
     const f32 scale = 1.f / std::sqrt((f32) head_size);
     for (int i = 0; i < settings.n_tokens; ++i) {
         yami_clear_ctx(ctx);
+        // TODO: for some reason after the prompt eval I see some traces with #ref=0 and time=nan
+        yami_clear_traces(ctx);
 
         YAMI_ASSERT(ctx_size < (int) llama.hparams.max_seq_len);
 
@@ -238,6 +240,8 @@ int main(int argc, char **argv) {
             }
             // next_layer_in = attn_layer_out + self.feed_forward.forward(self.ffn_norm(attn_layer_out))
             block_in = yami_add(ctx, cur, in_ff, true);
+
+            yami_print_traces(ctx);
         }
 
         block_in = yami_rms_norm(ctx, llama.norm, block_in);

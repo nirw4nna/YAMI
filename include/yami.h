@@ -149,8 +149,8 @@ extern "C" {
     extern void yami_set_scope(yami_ctx *ctx, yami_scope scope) noexcept;
     extern YAMI_PURE usize yami_used_mem(const yami_ctx *ctx) noexcept;
     extern void yami_mem_usage(const yami_ctx *ctx) noexcept;
-    // TODO: write also to file?
     extern void yami_print_traces(const yami_ctx *ctx) noexcept;
+    extern void yami_clear_traces(yami_ctx *ctx) noexcept;
     // ========================================================================
 
     // ========================== Tensor Manipulation =========================

@@ -21,6 +21,10 @@ else
 	CXXFLAGS	+= -DYAMI_DEBUG -O0 -g
 endif
 
+ifdef YAMI_TRACE
+	CXXFLAGS	+= -DYAMI_TRACE
+endif
+
 ifeq ($(MAKECMDGOALS),pyyami)
 	CXXFLAGS	+= -fPIC
 endif

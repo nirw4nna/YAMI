@@ -5,6 +5,11 @@
 #include <sys/sysinfo.h>
 #include "yami_blas.h"
 
+#if defined(YAMI_TRACE)
+#   include <vector>
+#   include <algorithm>
+#endif
+
 #define YAMI_ENTER_PRIVATE_SCOPE(CTX)   const yami_scope __old_scope = (CTX)->scope; (CTX)->scope = PRIVATE; yami_clear_ctx((CTX))
 #define YAMI_EXIT_PRIVATE_SCOPE(CTX)    (CTX)->scope = __old_scope
 #define YAMI_TENSOR_DIMS_0(PTR) const usize d0_##PTR = (PTR)->dim[0]
@@ -72,6 +77,37 @@
 #define YAMI_RANGE_START    ((int) 0)
 #define YAMI_RANGE_STOP     ((int) 1)
 
+#define YAMI_DTYPES         ((int) 1)
+
+#if defined(YAMI_TRACE)
+#   define YAMI_TRACE_COLUMNS  ((int) 7)
+#   define YAMI_TRACE_KERNELS  ((int) 2)
+#   define YAMI_TRACE_NODES    ((int) 100)
+
+enum yami_kernel : u8 {
+    GEMM,
+    GEVM,
+};
+
+constexpr static const char *const kernel_labels[YAMI_TRACE_KERNELS] = {
+        "GEMM",
+        "GEVM",
+};
+
+static_assert(YAMI_TRACE_COLUMNS == 7, "YAMI_TRACE_COLUMNS != 7: update");
+static_assert(YAMI_TRACE_KERNELS == 2, "YAMI_TRACE_KERNELS != 2: update");
+#endif
+
+enum yami_dtype : u8 {
+    F32,
+};
+
+constexpr static const char *const dtype_labels[YAMI_DTYPES] = {
+        "F32",
+};
+
+static_assert(YAMI_DTYPES == 1, "YAMI_DTYPES != 1: update");
+
 using yami_dim_range = usize[YAMI_MAX_DIMS][2];
 
 struct yami_obj {
@@ -92,53 +128,37 @@ struct yami_mem_buffer {
     int n_objs;
 };
 
-// TRACING:
-//  The objective is to be able to track down kernels execution times and other stats like the number of cache misses and the number of times that kernel is called
-//  I still have to figure out if the trace in global or local (meaning it accounts for just one inference loop).
-//
-//  Some key things to keep in mind:
-//      - Each kernel has an ID (name) but to fully identify it you need also the size of the input and output as well as the dtype.
-//      - This feature must be explicitly enabled during compilation (-DYAMI_TRACE?) and must not have an impact on regular runtime performance.
-
-#define YAMI_HASH_NODES 500
-
-enum yami_kernel : u8 {
-    GEMM,
-    GEVM,
-};
-
-enum yami_dtype : u8 {
-    F32,
-};
-
+#if defined(YAMI_TRACE)
 struct yami_trace {
 
     yami_trace(const usize in_dim_1[YAMI_MAX_DIMS],
                const usize in_dim_2[YAMI_MAX_DIMS],
                const usize out[YAMI_MAX_DIMS],
-               const yami_kernel kernel,
-               const yami_dtype dtype) : kernel(kernel), dtype(dtype) {
+               const yami_kernel kernel_,
+               const yami_dtype dtype_) : kernel(kernel_), dtype(dtype_) {
         memcpy(in_dims, in_dim_1, YAMI_MAX_DIMS * sizeof(usize));
         memcpy(in_dims[1], in_dim_2, YAMI_MAX_DIMS * sizeof(usize));
         memcpy(out_dim, out, YAMI_MAX_DIMS * sizeof(usize));
     }
-
     // For now assume always 2 inputs and 1 output
     usize in_dims[2][YAMI_MAX_DIMS]{};
     usize out_dim[YAMI_MAX_DIMS]{};
 
     usize ref{};
-    usize cycles{}, time_us{};
+    usize cycles{};
+    f64 time_ms{};
     usize cache_ref{}, cache_miss{};
     yami_kernel kernel;
     yami_dtype dtype;
 };
-
-struct yami_hash_node {
+// TODO: instead of showing cycles, show how many GFLOPS each kernel achieves (= flops / (time_ms * 1e6))
+//  also, in the recap section add like a 'global' GFLOPS measurement (total FLOPS accross all the kernels / elapsed time)
+struct yami_trace_node {
     yami_trace el;
     // Next element to handle multiple elements mapped to the same bucket
-    yami_hash_node *next;
+    yami_trace_node *next;
 };
+#endif
 
 // Each context has YAMI_SCOPES(3) buffers. A buffer is a memory region handled using a linear (arena) allocator, holding objects with the same lifetime.
 // Each new allocation happens in the buffer specified by `scope`, same goes for clearing.
@@ -151,7 +171,12 @@ struct yami_hash_node {
 // The PRIVATE buffer is used internally as a scratch buffer to store intermediate results inside certain functions (see: `yami_layer_norm`) and so the user can't use it.
 // The GLOBAL and LOCAL buffers instead are completely user-managed.
 struct yami_ctx {
-    yami_hash_node *traces_table[YAMI_HASH_NODES];
+
+#if defined(YAMI_TRACE)
+    yami_trace_node *traces_table[YAMI_TRACE_NODES];
+    f64 trace_start_time;
+#endif
+
     yami_mem_buffer *buffers[YAMI_SCOPES];
     int n_workers;
     yami_scope scope;
@@ -210,49 +235,48 @@ static YAMI_INLINE void yami_internal_c_vec_div(f32 *out, const f32 c,
 // =============================================================================================================
 
 // ============================================== Trace functions ==============================================
+#if defined(YAMI_TRACE)
 static int yami_trace_hash(const yami_trace *trace) noexcept {
     // Very simple djb2-like hashing function
     int hash = 5381;
+
     hash = ((hash << 5) + hash) + trace->kernel;
     hash = ((hash << 5) + hash) + trace->dtype;
-
     hash = ((hash << 5) + hash) + (int) trace->in_dims[0][0];
     hash = ((hash << 5) + hash) + (int) trace->in_dims[0][1];
     hash = ((hash << 5) + hash) + (int) trace->in_dims[0][2];
     hash = ((hash << 5) + hash) + (int) trace->in_dims[0][3];
-
     hash = ((hash << 5) + hash) + (int) trace->in_dims[1][0];
     hash = ((hash << 5) + hash) + (int) trace->in_dims[1][1];
     hash = ((hash << 5) + hash) + (int) trace->in_dims[1][2];
     hash = ((hash << 5) + hash) + (int) trace->in_dims[1][3];
-
     hash = ((hash << 5) + hash) + (int) trace->out_dim[0];
     hash = ((hash << 5) + hash) + (int) trace->out_dim[1];
     hash = ((hash << 5) + hash) + (int) trace->out_dim[2];
     hash = ((hash << 5) + hash) + (int) trace->out_dim[3];
 
-    return hash % YAMI_HASH_NODES;
+    return hash % YAMI_TRACE_NODES;
 }
 
 // If trace is already there, update the counters otherwise insert a new node.
-static void yami_trace_insert(yami_hash_node *hash_table[YAMI_HASH_NODES], yami_trace *trace) noexcept {
+static void yami_trace_insert(yami_trace_node *hash_table[YAMI_TRACE_NODES],
+                              yami_trace *trace) noexcept {
     const int idx = yami_trace_hash(trace);
-    yami_hash_node *node = hash_table[idx];
-
+    yami_trace_node *node = hash_table[idx];
     while (node != nullptr) {
         const yami_trace node_trace = node->el;
         if (node_trace.kernel == trace->kernel && node_trace.dtype == trace->dtype &&
             memcmp(node_trace.in_dims[0], trace->in_dims[0], YAMI_MAX_DIMS * sizeof(usize)) == 0 &&
             memcmp(node_trace.in_dims[1], trace->in_dims[1], YAMI_MAX_DIMS * sizeof(usize)) == 0 &&
             memcmp(node_trace.out_dim, trace->out_dim, YAMI_MAX_DIMS * sizeof(usize)) == 0) {
-
             break;
         }
         node = node->next;
     }
+
     if (node == nullptr) {
         // Allocate a new node for this trace
-        node = (yami_hash_node *) malloc(sizeof(yami_hash_node));
+        node = (yami_trace_node *) malloc(sizeof(yami_trace_node));
         node->next = hash_table[idx];
         memcpy(&node->el, trace, sizeof(yami_trace));
         hash_table[idx] = node;
@@ -261,11 +285,12 @@ static void yami_trace_insert(yami_hash_node *hash_table[YAMI_HASH_NODES], yami_
         // TODO: verify that the measurement are properly initialized
         node->el.ref++;
         node->el.cycles += trace->cycles;
-        node->el.time_us += trace->time_us;
+        node->el.time_ms += trace->time_ms;
         node->el.cache_miss += trace->cache_miss;
         node->el.cache_ref += trace->cache_ref;
     }
 }
+#endif
 // =============================================================================================================
 
 // ============================================== Helper functions ==============================================
@@ -382,16 +407,7 @@ void yami_free(yami_ctx *ctx) noexcept {
     free(ctx->buffers[LOCAL]);
     free(ctx->buffers[PRIVATE]);
 
-    // TODO: only if tracing is enabled
-    yami_hash_node *current, *tmp;
-    for (int i = 0; i < YAMI_HASH_NODES; ++i) {
-        current = ctx->traces_table[i];
-        while (current != nullptr) {
-            tmp = current;
-            current = current->next;
-            free(tmp);
-        }
-    }
+    yami_clear_traces(ctx);
 
     free(ctx);
 }
@@ -434,18 +450,124 @@ void yami_mem_usage(const yami_ctx *ctx) noexcept {
     );
 }
 
-#define YAMI_TRACE_COLUMNS 8
-
+// List all the traces and print them in a neat ASCII table
 void yami_print_traces(const yami_ctx *ctx) noexcept {
-    // List all the traces and print them in a neat ASCII table
-    // 1. Gather all data in a linear array
-    // 2. (Optionally) sort
-    // 3. Print
+#if defined(YAMI_TRACE)
+    const f64 trace_time = yami_timer();
+    std::vector<yami_trace *> traces;
 
-    const int col_widths[YAMI_TRACE_COLUMNS] = {
-        6,
-
+    for (int i = 0; i < YAMI_TRACE_NODES; ++i) {
+        yami_trace_node *node = ctx->traces_table[i];
+        while(node != nullptr) {
+            traces.push_back(&node->el);
+            node = node->next;
+        }
     }
+    // Sort by number of references
+    std::sort(traces.begin(), traces.end(), [](const yami_trace *a, const yami_trace *b) {
+       return a->ref > b->ref;
+    });
+
+    constexpr static int col_widths[YAMI_TRACE_COLUMNS] = {
+        6,
+        33,
+        16,
+        5,
+        8,
+        16,
+        13
+    };
+
+    static constexpr const char *const col_labels[YAMI_TRACE_COLUMNS] = {
+            "Kernel",
+            "In",
+            "Out",
+            "Dtype",
+            "#ref",
+            "Time (ms)",
+            "Cycles"
+    };
+
+    // Clear the console
+    printf("\033[2J\033[H");
+
+    // Header
+    for (int i = 0; i < YAMI_TRACE_COLUMNS; ++i) {
+        printf("+");
+        for (int j = 0; j < col_widths[i]; ++j) printf("-");
+    }
+    printf("+\n");
+    for (int i = 0; i < YAMI_TRACE_COLUMNS; ++i) {
+        printf("|");
+        printf("%-*s", col_widths[i], col_labels[i]);
+    }
+    printf("|\n");
+    for (int i = 0; i < YAMI_TRACE_COLUMNS; ++i) {
+        printf("+");
+        for (int j = 0; j < col_widths[i]; ++j) printf("-");
+    }
+    printf("+\n");
+
+
+    // Content
+    char format_buff[256];
+    for (const auto trace : traces) {
+        printf("|%-*s", col_widths[0], kernel_labels[trace->kernel]);
+        snprintf(format_buff, col_widths[1], "[%ld,%ld,%ld,%ld] x [%ld,%ld,%ld,%ld]",
+                 trace->in_dims[0][0], trace->in_dims[0][1], trace->in_dims[0][2], trace->in_dims[0][3],
+                 trace->in_dims[1][0], trace->in_dims[1][1], trace->in_dims[1][2], trace->in_dims[1][3]
+        );
+
+        printf("|%-*s", col_widths[1], format_buff);
+
+        snprintf(format_buff, col_widths[2], "[%ld,%ld,%ld,%ld]",
+                 trace->out_dim[0], trace->out_dim[1], trace->out_dim[2], trace->out_dim[3]
+        );
+
+        printf("|%-*s", col_widths[2], format_buff);
+
+        printf("|%-*s", col_widths[3], dtype_labels[trace->dtype]);
+        printf("|%-*ld", col_widths[4], trace->ref);
+
+        snprintf(format_buff, col_widths[5], "%.1f (%.1f%%)",
+                 trace->time_ms / (f64) trace->ref,
+                 // How much of the elapsed time this particular kernel took
+                 trace->time_ms / ((trace_time - ctx->trace_start_time) * 1e3) * 100
+        );
+
+        printf("|%-*s", col_widths[5], format_buff);
+        printf("|%-*.ld|\n", col_widths[6], (usize) ((f64) trace->cycles / (f64) trace->ref));
+    }
+
+    // Footer
+    for (int i = 0; i < YAMI_TRACE_COLUMNS; ++i) {
+        printf("+");
+        for (int j = 0; j < col_widths[i]; ++j) printf("-");
+    }
+    printf("+\n");
+    printf("Elapsed time: %.1fs\n", trace_time - ctx->trace_start_time);
+#else
+    YAMI_UNUSED(ctx);
+#endif
+}
+
+void yami_clear_traces(yami_ctx *ctx) noexcept {
+#if defined(YAMI_TRACE)
+    yami_trace_node *current, *tmp;
+    for (int i = 0; i < YAMI_TRACE_NODES; ++i) {
+        current = ctx->traces_table[i];
+        while (current != nullptr) {
+            tmp = current;
+            current = current->next;
+            free(tmp);
+        }
+        ctx->traces_table[i] = nullptr;
+    }
+
+    ctx->trace_start_time = yami_timer();
+#else
+    YAMI_UNUSED(ctx);
+#endif
 }
 
 yami_tensor *yami_new_tensor(yami_ctx *ctx, const int n_dim,
@@ -880,8 +1002,6 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
         YAMI_LOG_FATAL("too few dimensions, use yami_mul to multiply 1D tensors");
     }
 
-//    const f64 start__ = yami_timer();
-
     const usize xa_n_rows = xa->dim[yami_tensor_dim(xa, -2)];
     const usize xa_n_cols = xa->dim[yami_tensor_dim(xa, -1)];
     const usize xb_n_rows = xb->dim[yami_tensor_dim(xb, -2)];
@@ -915,14 +1035,16 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
     YAMI_UNUSED(d2_xb), YAMI_UNUSED(d2_res);
     YAMI_UNUSED(d3_stride_xa), YAMI_UNUSED(d3_stride_xb);
 
+#if defined(YAMI_TRACE)
     yami_trace trace{xa->dim, xb->dim, res->dim,
                      d2_xa == 1 ? yami_kernel::GEVM : yami_kernel::GEMM,
                      yami_dtype::F32
     };
     // TODO: cache...
-    trace.time_us = (usize) (yami_timer() * 1e6);
+    trace.time_ms = (usize) (yami_timer() * 1e3);
     // TODO: check if perf_event yields more accurate timings?
     trace.cycles = __rdtsc();
+#endif
     for (usize d0 = 0; d0 < d0_res; ++d0) {
         for (usize d1 = 0; d1 < d1_res; ++d1) {
             // TODO: handle all the supported dtypes
@@ -948,8 +1070,11 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
             }
         }
     }
-    trace.time_us = (usize) (yami_timer() * 1e6) - trace.time_us;
+#if defined(YAMI_TRACE)
+    trace.time_ms = (usize) (yami_timer() * 1e3) - trace.time_ms;
     trace.cycles = __rdtsc() - trace.cycles;
+    yami_trace_insert(ctx->traces_table, &trace);
+#endif
 
     YAMI_EXIT_PRIVATE_SCOPE(ctx);
 //    const f64 stop__ = yami_timer();
