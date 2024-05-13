@@ -12,6 +12,7 @@
 
 #define YAMI_ENTER_PRIVATE_SCOPE(CTX)   const yami_scope __old_scope = (CTX)->scope; (CTX)->scope = PRIVATE; yami_clear_ctx((CTX))
 #define YAMI_EXIT_PRIVATE_SCOPE(CTX)    (CTX)->scope = __old_scope
+
 #define YAMI_TENSOR_DIMS_0(PTR) const usize d0_##PTR = (PTR)->dim[0]
 
 #define YAMI_TENSOR_DIMS_1(PTR) YAMI_TENSOR_DIMS_0(PTR); \
@@ -134,8 +135,9 @@ struct yami_trace {
     yami_trace(const usize in_dim_1[YAMI_MAX_DIMS],
                const usize in_dim_2[YAMI_MAX_DIMS],
                const usize out[YAMI_MAX_DIMS],
+               const usize flop_,
                const yami_kernel kernel_,
-               const yami_dtype dtype_) : kernel(kernel_), dtype(dtype_) {
+               const yami_dtype dtype_) : flop(flop_), kernel(kernel_), dtype(dtype_) {
         memcpy(in_dims, in_dim_1, YAMI_MAX_DIMS * sizeof(usize));
         memcpy(in_dims[1], in_dim_2, YAMI_MAX_DIMS * sizeof(usize));
         memcpy(out_dim, out, YAMI_MAX_DIMS * sizeof(usize));
@@ -145,9 +147,10 @@ struct yami_trace {
     usize out_dim[YAMI_MAX_DIMS]{};
 
     usize ref{};
-    usize cycles{};
     f64 time_ms{};
     usize cache_ref{}, cache_miss{};
+    // Number of floating point operations performed by this kernel
+    usize flop;
     yami_kernel kernel;
     yami_dtype dtype;
 };
@@ -284,7 +287,6 @@ static void yami_trace_insert(yami_trace_node *hash_table[YAMI_TRACE_NODES],
         // Update the node with its new trace
         // TODO: verify that the measurement are properly initialized
         node->el.ref++;
-        node->el.cycles += trace->cycles;
         node->el.time_ms += trace->time_ms;
         node->el.cache_miss += trace->cache_miss;
         node->el.cache_ref += trace->cache_ref;
@@ -451,7 +453,7 @@ void yami_mem_usage(const yami_ctx *ctx) noexcept {
 }
 
 // List all the traces and print them in a neat ASCII table
-void yami_print_traces(const yami_ctx *ctx) noexcept {
+void yami_print_traces(yami_ctx *ctx) noexcept {
 #if defined(YAMI_TRACE)
     const f64 trace_time = yami_timer();
     std::vector<yami_trace *> traces;
@@ -475,7 +477,7 @@ void yami_print_traces(const yami_ctx *ctx) noexcept {
         5,
         8,
         16,
-        13
+        10
     };
 
     static constexpr const char *const col_labels[YAMI_TRACE_COLUMNS] = {
@@ -485,7 +487,7 @@ void yami_print_traces(const yami_ctx *ctx) noexcept {
             "Dtype",
             "#ref",
             "Time (ms)",
-            "Cycles"
+            "GFLOPS"
     };
 
     // Clear the console
@@ -511,6 +513,8 @@ void yami_print_traces(const yami_ctx *ctx) noexcept {
 
     // Content
     char format_buff[256];
+    usize global_flop = 0;
+    const f64 elapsed_time = trace_time - ctx->trace_start_time;
     for (const auto trace : traces) {
         printf("|%-*s", col_widths[0], kernel_labels[trace->kernel]);
         snprintf(format_buff, col_widths[1], "[%ld,%ld,%ld,%ld] x [%ld,%ld,%ld,%ld]",
@@ -529,14 +533,16 @@ void yami_print_traces(const yami_ctx *ctx) noexcept {
         printf("|%-*s", col_widths[3], dtype_labels[trace->dtype]);
         printf("|%-*ld", col_widths[4], trace->ref);
 
+        const f64 kernel_time_ms = trace->time_ms / (f64) trace->ref;
         snprintf(format_buff, col_widths[5], "%.1f (%.1f%%)",
-                 trace->time_ms / (f64) trace->ref,
+                 kernel_time_ms,
                  // How much of the elapsed time this particular kernel took
-                 trace->time_ms / ((trace_time - ctx->trace_start_time) * 1e3) * 100
+                 trace->time_ms / (elapsed_time * 1e3) * 100
         );
 
         printf("|%-*s", col_widths[5], format_buff);
-        printf("|%-*.ld|\n", col_widths[6], (usize) ((f64) trace->cycles / (f64) trace->ref));
+        printf("|%-*.2f|\n", col_widths[6], (f64) trace->flop / (kernel_time_ms * 1e6));
+        global_flop += (trace->flop * trace->ref);
     }
 
     // Footer
@@ -545,7 +551,11 @@ void yami_print_traces(const yami_ctx *ctx) noexcept {
         for (int j = 0; j < col_widths[i]; ++j) printf("-");
     }
     printf("+\n");
-    printf("Elapsed time: %.1fs\n", trace_time - ctx->trace_start_time);
+    printf("Elapsed time:\t\t\t\t%.1fs\n", elapsed_time);
+    printf("Number of floating point operations:\t%.1e (%.2f GFLOPS)\n", (f64) global_flop, (f64) global_flop / (elapsed_time * 1e9));
+
+    // Try to correct the start time to not take into account the latency introduced by this logging function
+    ctx->trace_start_time += (yami_timer() - trace_time);
 #else
     YAMI_UNUSED(ctx);
 #endif
@@ -1037,13 +1047,12 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
 
 #if defined(YAMI_TRACE)
     yami_trace trace{xa->dim, xb->dim, res->dim,
+                     2 * d2_xa * d3_xa * d3_xb,
                      d2_xa == 1 ? yami_kernel::GEVM : yami_kernel::GEMM,
                      yami_dtype::F32
     };
     // TODO: cache...
-    trace.time_ms = (usize) (yami_timer() * 1e3);
-    // TODO: check if perf_event yields more accurate timings?
-    trace.cycles = __rdtsc();
+    trace.time_ms = yami_timer() * 1e3;
 #endif
     for (usize d0 = 0; d0 < d0_res; ++d0) {
         for (usize d1 = 0; d1 < d1_res; ++d1) {
@@ -1071,19 +1080,11 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
         }
     }
 #if defined(YAMI_TRACE)
-    trace.time_ms = (usize) (yami_timer() * 1e3) - trace.time_ms;
-    trace.cycles = __rdtsc() - trace.cycles;
+    trace.time_ms = yami_timer() * 1e3 - trace.time_ms;
     yami_trace_insert(ctx->traces_table, &trace);
 #endif
 
     YAMI_EXIT_PRIVATE_SCOPE(ctx);
-//    const f64 stop__ = yami_timer();
-//
-//    printf("%s,[%ldx%ldx%ldx%ld],[%ldx%ldx%ldx%ld],%.3f\n",
-//           kernel_lookup[d2_xa == 1],
-//           xa->dim[0], xa->dim[1], xa->dim[2], xa->dim[3],
-//           xb->dim[0], xb->dim[1], xb->dim[2], xb->dim[3],
-//           (stop__ - start__) * 1000.);
     return res;
 }
 
