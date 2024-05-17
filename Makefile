@@ -1,9 +1,9 @@
-#TESTS_TARGETS = tests/test_blas
+TESTS_TARGETS = tests/test_gevm
 MODELS = gpt2 llama
 
 CXX			=	g++
 CXXFLAGS	=	-std=c++17 -I./include/ -Wall -Wextra -Wshadow -Wformat -Wnoexcept -Wcast-qual -Wunused -Wdouble-promotion \
- 				-Wlogical-op -Wcast-align -fno-exceptions -fno-rtti -fopenmp
+ 				-Wlogical-op -Wcast-align -fno-exceptions -fno-rtti -pthread
 LDFLAGS		=	-lm
 
 UNAME_M	=	$(shell uname -m)
@@ -18,7 +18,7 @@ endif
 ifdef YAMI_FAST
 	CXXFLAGS	+= -DYAMI_FAST -Ofast -ffp-contract=fast -funroll-loops -flto=auto -fuse-linker-plugin
 else
-	CXXFLAGS	+= -DYAMI_DEBUG -O0 -g
+	CXXFLAGS	+= -DYAMI_DEBUG -fsanitize=address -O0 -g
 endif
 
 ifdef YAMI_TRACE
@@ -46,6 +46,12 @@ clean:
 
 pyyami: src/yami.cpp include/yami.h yami_blas.o
 	$(CXX) $(CXXFLAGS) -shared $< -o yami.so yami_blas.o
+
+tests/test_gevm: tests/test_gevm.cpp yami_blas.o
+	$(CXX) $(CXXFLAGS) $< -o $@ yami_blas.o $(LDFLAGS)
+#	./tests/test_gevm
+#	perf record -e cycles,cache-misses,cache-references --call-graph dwarf ./tests/test_gevm
+#	hotspot
 
 #test: $(TESTS_TARGETS)
 #	@fail=0; \

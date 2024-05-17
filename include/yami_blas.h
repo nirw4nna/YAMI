@@ -43,3 +43,18 @@ extern void yami_gevm_f32(usize n, usize k,
                           const f32 *__restrict a,
                           const f32 *__restrict b, usize stride_b,
                           f32 *__restrict c, void *work) noexcept;
+
+extern void yami_gevm_f32_prefetch(usize n, usize k,
+                                   const f32 *__restrict a,
+                                   const f32 *__restrict b, usize stride_b,
+                                   f32 *__restrict c, void *work) noexcept;
+
+extern void yami_gevm_f32_T(usize n, usize k,
+                            const f32 *__restrict a,
+                            const f32 *__restrict b, usize stride_b,
+                            f32 *__restrict c, void *work) noexcept;
+
+extern void yami_gevm_f32_T_simd(usize n, usize k,
+                                 const f32 *__restrict a,
+                                 const f32 *__restrict b, usize stride_b,
+                                 f32 *__restrict c, void *work) noexcept;
