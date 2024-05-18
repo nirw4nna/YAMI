@@ -132,7 +132,6 @@ int main(int argc, char **argv) {
     const f32 scale = 1.f / std::sqrt((f32) head_size);
     for (int i = 0; i < settings.n_tokens; ++i) {
         yami_clear_ctx(ctx);
-        // TODO: for some reason after the prompt eval I see some traces with #ref=0 and time=nan
         yami_clear_traces(ctx);
 
         YAMI_ASSERT(ctx_size < (int) llama.hparams.max_seq_len);
@@ -197,12 +196,19 @@ int main(int argc, char **argv) {
                 // [n_heads, head_size, seq_len]
                 k = yami_contiguous(ctx,
                                     yami_transpose(ctx,
-                                                   yami_transpose(ctx, k, 1, 2),
-                                                   -2, -1)
+                                                   k,
+                                                   1, 2
+                                    )
                 );
                 // [n_heads, seq_len + ctx_size, head_size]
                 v = yami_contiguous(ctx,
-                                    yami_transpose(ctx,v, 1, 2)
+                                    yami_transpose(ctx,
+                                                   yami_transpose(ctx,
+                                                                  v,
+                                                                  1, 2
+                                                   ),
+                                                   -2, -1
+                                    )
                 );
 
                 yami_tensor *qk_scaled = yami_mulc(ctx,

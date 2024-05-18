@@ -178,8 +178,9 @@ def export_model(out_file: str, model: Model, model_dict, hparams: Hparams, to_t
             tensor = model_dict[label]
             print(f'Found new tensor: [ {label} {tensor.shape} {tensor.dtype} ]')
             if to_transpose and any([label.endswith(tt) for tt in to_transpose]):
-                print(f'Tensor {label} will be transposed')
-                tensor = tensor.t()
+                # Skip transposing tensors, we now compute C = AB^T to better exploit parallelism
+                # in GEVM
+                pass
             if to_ignore and any([label.endswith(ti) for ti in to_ignore]):
                 print(f'Tensor {label} will be ignored')
                 keys_to_remove.add(label)

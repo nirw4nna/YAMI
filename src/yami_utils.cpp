@@ -652,7 +652,7 @@ static usize parse_mem_arg(const char *const mem_str) noexcept {
 
 void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexcept {
     // TODO: define some sane defaults that can be used based on the model one wants to load
-    settings->n_workers = 1;
+    settings->n_workers = -1;
     settings->n_tokens = 100;
     settings->temperature = 1.f;
     settings->model_file = "yami_model.bin";
@@ -713,7 +713,7 @@ void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexce
             printf("  --help\t\tDisplay this message.\n");
             printf("  -i, --input\t\tInput prompt.\n");
             printf("  -n, --new-tokens\tNumber of new tokens to generate (default=100).\n");
-            printf("  -w, --workers\t\tNumber of workers to use (default=1).\n");
+            printf("  -w, --workers\t\tNumber of workers to use (default=nproc() / 2).\n");
             printf("  -t, --temp\t\tModel temperature (default=1.0).\n");
             printf("  -k, --top-k\t\tTop k sampling (default=disabled).\n");
             printf("  -m, --model\t\tPath to the model file (default=yami_model.bin).\n");
