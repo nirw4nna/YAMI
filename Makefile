@@ -18,7 +18,7 @@ endif
 ifdef YAMI_FAST
 	CXXFLAGS	+= -DYAMI_FAST -Ofast -ffp-contract=fast -funroll-loops -flto=auto -fuse-linker-plugin
 else
-	CXXFLAGS	+= -DYAMI_DEBUG -fsanitize=address -O0 -g
+	CXXFLAGS	+= -DYAMI_DEBUG -O0 -g #-fsanitize=address doesn't work when compiling YAMI as a shared object
 endif
 
 ifdef YAMI_TRACE

@@ -42,6 +42,7 @@
 #   define YAMI_STRICTLY_PURE   __attribute_const__
 #   define YAMI_PURE            __attribute_pure__
 #   define YAMI_INLINE          inline __attribute__((always_inline))
+#   define YAMI_NOINLINE        __attribute__((__noinline__))
 #else
 #   define YAMI_STRICTLY_PURE
 #   define YAMI_PURE

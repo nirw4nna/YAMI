@@ -1,10 +1,6 @@
 #include "yami_blas.h"
 #include <cstring>
 
-#if defined(_OPENMP)
-#   include <omp.h>
-#endif
-
 using f32x8 = __m256;
 
 #define rank1_8x8(A, B, idx)                                    \

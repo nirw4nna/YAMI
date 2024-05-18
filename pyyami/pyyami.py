@@ -245,10 +245,10 @@ _lib.yami_concat.restype = yami_tensor_p
 
 
 def yami_matmul(ctx: YamiContext, xa: YamiTensor, xb: YamiTensor) -> YamiTensor:
-    return YamiTensor(_lib.yami_matmul(ctx, xa, xb, None))
+    return YamiTensor(_lib.yami_matmul(ctx, xa, xb))
 
 
-_lib.yami_matmul.argtypes = [yami_ctx_p, yami_tensor_p, yami_tensor_p, yami_tensor_p]
+_lib.yami_matmul.argtypes = [yami_ctx_p, yami_tensor_p, yami_tensor_p]
 _lib.yami_matmul.restype = yami_tensor_p
 
 

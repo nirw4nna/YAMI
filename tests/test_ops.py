@@ -70,9 +70,48 @@ def ctx():
 
 
 class TestOps:
+    def test_matmul(self, ctx: YamiContext):
+        # In YAMI matmul performs C = AB^T, this means target_b must be transposed
+        for _ in range(TEST_STEPS):
+            target_a, target_b = _input_params(is_binary_op=True, is_matmul=True)
+
+            my_a = YamiTensor.from_np(ctx, 'my_a', target_a)
+            my_b = YamiTensor.from_np(ctx, 'my_b', np.ascontiguousarray(target_b.swapaxes(-1, -2)))
+
+            my_res = yami_matmul(ctx, my_a, my_b)
+
+            assert _all_close(my_res.as_np(), np.matmul(target_a, target_b))
+
+            ctx.clear()
+
+        # Test some big 2-D matrices
+        for _ in range(TEST_STEPS):
+            a = _random_ndarray(1, 1, randint(1, 1024), 1024)
+            b = _random_ndarray(1, 1, 1024, 1024)
+            c = np.matmul(a, b.swapaxes(-1, -2))
+            my_a = YamiTensor.from_np(ctx, 'my_a', a)
+            my_b = YamiTensor.from_np(ctx, 'my_b', b)
+
+            my_res = yami_matmul(ctx, my_a, my_b)
+
+            assert _all_close(my_res.as_np(), c)
+            ctx.clear()
+
+        # Test some big 1-D matrices
+        for _ in range(TEST_STEPS):
+            a = _random_ndarray(1, 1, 1, 1024)
+            b = _random_ndarray(1, 1, randint(1, 1024), 1024)
+            c = np.matmul(a, b.swapaxes(-1, -2))
+            my_a = YamiTensor.from_np(ctx, 'my_a', a)
+            my_b = YamiTensor.from_np(ctx, 'my_b', b)
+
+            my_res = yami_matmul(ctx, my_a, my_b)
+
+            assert _all_close(my_res.as_np(), c)
+            ctx.clear()
+
     def test_binary(self, ctx: YamiContext):
         ops_to_test = {
-            "yami_matmul": "matmul",
             "yami_add": "add",
             "yami_sub": "subtract",
             "yami_mul": "multiply",

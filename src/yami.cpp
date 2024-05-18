@@ -138,6 +138,7 @@ struct yami_worker {
     // and the worker actually receives that signal. This is not the case with a spinlock however the spinlock will cause
     // higher utilization (all the cores will be maxed-out until the inference is done) since the workers are created only once
     // and are utilized only (at least for now) to speed-up GEVM which means they are quite often idle.
+    // TODO: validate if this is actually still true
     pthread_cond_t cond;
     pthread_mutex_t mtx;
     bool has_work;
@@ -643,9 +644,10 @@ void yami_print_traces(yami_ctx *ctx) noexcept {
     const f64 elapsed_time = trace_time - ctx->trace_start_time;
     for (const auto trace : traces) {
         printf("|%-*s", col_widths[0], kernel_labels[trace->kernel]);
+        // B is transposed, swap its last two dimensions
         snprintf(format_buff, col_widths[1], "[%ld,%ld,%ld,%ld] x [%ld,%ld,%ld,%ld]",
                  trace->in_dims[0][0], trace->in_dims[0][1], trace->in_dims[0][2], trace->in_dims[0][3],
-                 trace->in_dims[1][0], trace->in_dims[1][1], trace->in_dims[1][2], trace->in_dims[1][3]
+                 trace->in_dims[1][0], trace->in_dims[1][1], trace->in_dims[1][3], trace->in_dims[1][2]
         );
 
         printf("|%-*s", col_widths[1], format_buff);
@@ -1140,23 +1142,23 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
         YAMI_LOG_FATAL("too few dimensions, use yami_mul to multiply 1D tensors");
     }
 
-    const usize xa_n_rows = xa->dim[yami_tensor_dim(xa, -2)];
-    const usize xa_n_cols = xa->dim[yami_tensor_dim(xa, -1)];
-    const usize xb_n_rows = xb->dim[yami_tensor_dim(xb, -1)];
-    const usize xb_n_cols = xb->dim[yami_tensor_dim(xb, -2)];
+    const usize xa_rows = xa->dim[yami_tensor_dim(xa, -2)];
+    const usize xa_cols = xa->dim[yami_tensor_dim(xa, -1)];
+    const usize xb_rows = xb->dim[yami_tensor_dim(xb, -1)];
+    const usize xb_cols = xb->dim[yami_tensor_dim(xb, -2)];
 
-    if (xa_n_cols != xb_n_rows) {
+    if (xa_cols != xb_rows) {
         YAMI_LOG_FATAL("can't multiply (%ld, %ld) by (%ld, %ld)",
-                       xa_n_rows, xa_n_cols,
-                       xb_n_rows, xb_n_cols
+                       xa_rows, xa_cols,
+                       xb_rows, xb_cols
         );
     }
 
     YAMI_ASSERT(yami_can_broadcast(xa, xb, YAMI_MAX_DIMS - 2));
 
     usize res_dim[YAMI_MAX_DIMS];
-    res_dim[YAMI_MAX_DIMS - 2] = xa_n_rows;
-    res_dim[YAMI_MAX_DIMS - 1] = xb_n_cols;
+    res_dim[YAMI_MAX_DIMS - 2] = xa_rows;
+    res_dim[YAMI_MAX_DIMS - 1] = xb_cols;
     for (int i = 0; i < YAMI_MAX_DIMS - 2; ++i)
         res_dim[i] = YAMI_MAX(xa->dim[i], xb->dim[i]);
 
@@ -1167,18 +1169,16 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
     YAMI_ENTER_PRIVATE_SCOPE(ctx);
     yami_mem_buffer *work_buff = yami_scope_buffer();
 
-    YAMI_TENSOR_FIELDS(xa, 3);
-    YAMI_TENSOR_FIELDS(xb, 3);
+    YAMI_TENSOR_FIELDS(xa, 2);
+    YAMI_TENSOR_FIELDS(xb, 2);
     YAMI_TENSOR_FIELDS(res, 2);
-    YAMI_UNUSED(d2_xb), YAMI_UNUSED(d2_res);
-    YAMI_UNUSED(d3_stride_xa), YAMI_UNUSED(d3_stride_xb);
+    YAMI_UNUSED(d2_xa), YAMI_UNUSED(d2_xb), YAMI_UNUSED(d2_res);
 
     std::atomic_int progress{};
-
 #if defined(YAMI_TRACE)
     yami_trace trace{xa->dim, xb->dim, res->dim,
-                     2 * d2_xa * d3_xa * d3_xb,
-                     d2_xa == 1 ? yami_kernel::GEVM : yami_kernel::GEMM,
+                     2 * xa_rows * xa_cols * xb_cols,
+                     xa_rows == 1 ? yami_kernel::GEVM : yami_kernel::GEMM,
                      yami_dtype::F32
     };
     trace.time_ms = yami_timer() * 1e3;
@@ -1191,12 +1191,14 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
             const f32 *__restrict xb_data = &xb->data[yami_broadcast_offset(xb, 1)];
 
             // M = 1 so this is vector times matrix
-            if (d2_xa == 1) {
+            if (xa_rows == 1) {
                 progress.store(1);
 
                 // Split N by n_workers
-                const usize n_work = xb_n_cols / ctx->n_workers;
-                const usize leftover_n = xb_n_cols - (n_work * ctx->n_workers);
+                const usize n_work = xb_cols / ctx->n_workers;
+                // Remember that n_workers is at least 1, also the main thread should have at least
+                // n_work rows of B to work on
+                const usize leftover_n = xb_cols - (n_work * (ctx->n_workers - 1));
 
                 // Enqueue tasks for the workers
                 for (int i = 1; i < ctx->n_workers; ++i) {
@@ -1207,7 +1209,7 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
                     t->xa = xa_data;
                     t->xb = &xb_data[(i - 1) * n_work * d2_stride_xb];
                     t->res = &res_data[(i - 1) * n_work];
-                    t->k = xa_n_cols;
+                    t->k = xa_cols;
                     t->n = n_work;
                     t->stride_b = d2_stride_xb;
                     t->progress_counter = &progress;
@@ -1219,7 +1221,7 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
                 }
 
                 // Do the leftover work on the main thread
-                yami_gevm_f32(leftover_n, xa_n_cols,
+                yami_gevm_f32(leftover_n, xa_cols,
                               xa_data,
                               &xb_data[(ctx->n_workers - 1) * n_work * d2_stride_xb],
                               d2_stride_xb,
@@ -1230,7 +1232,7 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
                 while (progress.load() != ctx->n_workers)
                     ;
             } else {
-                yami_gemm_f32(xa_n_rows, xb_n_cols, xa_n_cols,
+                yami_gemm_f32(xa_rows, xb_cols, xa_cols,
                               xa_data, d2_stride_xa,
                               xb_data, d2_stride_xb,
                               res_data, d2_stride_res,
