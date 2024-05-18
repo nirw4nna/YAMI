@@ -131,13 +131,12 @@ struct yami_mem_buffer {
 
 #if defined(YAMI_TRACE)
 struct yami_trace {
-
     yami_trace(const usize in_dim_1[YAMI_MAX_DIMS],
                const usize in_dim_2[YAMI_MAX_DIMS],
                const usize out[YAMI_MAX_DIMS],
                const usize flop_,
                const yami_kernel kernel_,
-               const yami_dtype dtype_) : flop(flop_), kernel(kernel_), dtype(dtype_) {
+               const yami_dtype dtype_) noexcept :  flop(flop_), kernel(kernel_), dtype(dtype_) {
         memcpy(in_dims, in_dim_1, YAMI_MAX_DIMS * sizeof(usize));
         memcpy(in_dims[1], in_dim_2, YAMI_MAX_DIMS * sizeof(usize));
         memcpy(out_dim, out, YAMI_MAX_DIMS * sizeof(usize));
@@ -148,14 +147,12 @@ struct yami_trace {
 
     usize ref{};
     f64 time_ms{};
-    usize cache_ref{}, cache_miss{};
     // Number of floating point operations performed by this kernel
     usize flop;
     yami_kernel kernel;
     yami_dtype dtype;
 };
-// TODO: instead of showing cycles, show how many GFLOPS each kernel achieves (= flops / (time_ms * 1e6))
-//  also, in the recap section add like a 'global' GFLOPS measurement (total FLOPS accross all the kernels / elapsed time)
+
 struct yami_trace_node {
     yami_trace el;
     // Next element to handle multiple elements mapped to the same bucket
@@ -174,7 +171,6 @@ struct yami_trace_node {
 // The PRIVATE buffer is used internally as a scratch buffer to store intermediate results inside certain functions (see: `yami_layer_norm`) and so the user can't use it.
 // The GLOBAL and LOCAL buffers instead are completely user-managed.
 struct yami_ctx {
-
 #if defined(YAMI_TRACE)
     yami_trace_node *traces_table[YAMI_TRACE_NODES];
     f64 trace_start_time;
@@ -262,10 +258,10 @@ static int yami_trace_hash(const yami_trace *trace) noexcept {
 }
 
 // If trace is already there, update the counters otherwise insert a new node.
-static void yami_trace_insert(yami_trace_node *hash_table[YAMI_TRACE_NODES],
+static void yami_trace_insert(yami_trace_node *traces_table[YAMI_TRACE_NODES],
                               yami_trace *trace) noexcept {
     const int idx = yami_trace_hash(trace);
-    yami_trace_node *node = hash_table[idx];
+    yami_trace_node *node = traces_table[idx];
     while (node != nullptr) {
         const yami_trace node_trace = node->el;
         if (node_trace.kernel == trace->kernel && node_trace.dtype == trace->dtype &&
@@ -280,16 +276,14 @@ static void yami_trace_insert(yami_trace_node *hash_table[YAMI_TRACE_NODES],
     if (node == nullptr) {
         // Allocate a new node for this trace
         node = (yami_trace_node *) malloc(sizeof(yami_trace_node));
-        node->next = hash_table[idx];
+        node->next = traces_table[idx];
         memcpy(&node->el, trace, sizeof(yami_trace));
-        hash_table[idx] = node;
+        traces_table[idx] = node;
     } else {
         // Update the node with its new trace
         // TODO: verify that the measurement are properly initialized
         node->el.ref++;
         node->el.time_ms += trace->time_ms;
-        node->el.cache_miss += trace->cache_miss;
-        node->el.cache_ref += trace->cache_ref;
     }
 }
 #endif
@@ -470,7 +464,7 @@ void yami_print_traces(yami_ctx *ctx) noexcept {
        return a->ref > b->ref;
     });
 
-    constexpr static int col_widths[YAMI_TRACE_COLUMNS] = {
+    static constexpr int col_widths[YAMI_TRACE_COLUMNS] = {
         6,
         33,
         16,
@@ -1051,7 +1045,6 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
                      d2_xa == 1 ? yami_kernel::GEVM : yami_kernel::GEMM,
                      yami_dtype::F32
     };
-    // TODO: cache...
     trace.time_ms = yami_timer() * 1e3;
 #endif
     for (usize d0 = 0; d0 < d0_res; ++d0) {
