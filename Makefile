@@ -1,4 +1,4 @@
-TESTS_TARGETS = tests/test_gevm
+TESTS_TARGETS = test_gevm test_gemm
 MODELS = gpt2 llama
 
 CXX			=	g++
@@ -15,10 +15,11 @@ endif
 
 # At some point I should introduce "levels", for example logging each time a tensor is created could be enabled
 # only at the highest debug level.
-ifdef YAMI_FAST
-	CXXFLAGS	+= -DYAMI_FAST -Ofast -ffp-contract=fast -funroll-loops -flto=auto -fuse-linker-plugin
+# Note that -fsanitize=address can't be used when compiling a shared object
+ifdef YAMI_DEBUG
+	CXXFLAGS	+= -DYAMI_DEBUG -O0 -g
 else
-	CXXFLAGS	+= -DYAMI_DEBUG -O0 -g #-fsanitize=address doesn't work when compiling YAMI as a shared object
+	CXXFLAGS	+= -DYAMI_FAST -Ofast -ffp-contract=fast -funroll-loops -flto=auto -fuse-linker-plugin
 endif
 
 ifdef YAMI_TRACE
@@ -27,6 +28,11 @@ endif
 
 ifeq ($(MAKECMDGOALS),pyyami)
 	CXXFLAGS	+= -fPIC
+endif
+
+# Link OpenBLAS when compiling the tests
+ifeq ($(MAKECMDGOALS), $(filter $(MAKECMDGOALS), $(TESTS_TARGETS)))
+	LDFLAGS		+= -lopenblas
 endif
 
 UNAME_S	=	$(shell uname -s)
@@ -39,18 +45,24 @@ $(info   LDFLAGS:	$(LDFLAGS))
 $(info   CXX:		$(shell $(CXX) --version | head -n 1))
 $(info )
 
-.PHONY: clean pyyami $(MODELS)
+.PHONY: clean pyyami $(MODELS) $(TESTS_TARGETS)
 
 clean:
-	rm -rf *.o *.so $(MODELS)
+	rm -rf *.o *.so *.old $(MODELS) $(TESTS_TARGETS)
 
 pyyami: src/yami.cpp include/yami.h yami_blas.o
 	$(CXX) $(CXXFLAGS) -shared $< -o yami.so yami_blas.o
 
-tests/test_gevm: tests/test_gevm.cpp yami_blas.o
+test_gevm: tests/test_gevm.cpp yami_blas.o
 	$(CXX) $(CXXFLAGS) $< -o $@ yami_blas.o $(LDFLAGS)
-#	./tests/test_gevm
-#	perf record -e cycles,cache-misses,cache-references --call-graph dwarf ./tests/test_gevm
+	OMP_NUM_THREADS=1 ./test_gevm
+#	perf record -e cycles,cache-misses,cache-references --call-graph dwarf ./tests/test_gemm
+#	hotspot
+
+test_gemm: tests/test_gemm.cpp yami_blas.o
+	$(CXX) $(CXXFLAGS) $< -o $@ yami_blas.o $(LDFLAGS)
+	OMP_NUM_THREADS=1 ./test_gemm
+#	perf record -e cycles,cache-misses,cache-references --call-graph dwarf ./tests/test_gemm
 #	hotspot
 
 #test: $(TESTS_TARGETS)

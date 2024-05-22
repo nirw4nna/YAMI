@@ -2,7 +2,7 @@
 
 // Collection of optimized BLAS-like routines for deep learning. All the non-trivial mathematical
 // functions required by YAMI must be implemented here.
-//
+
 // TODO: define the supported data types
 
 #include "yami.h"
@@ -24,27 +24,38 @@
 #   define MC   128
 #endif
 
+// If we are going to have a buffer for each worker keep in mind that the total number of buffers cannot exceed
+// the L3 size!
 #if !defined(NC)
-#   define NC   2820
+#   define NC   2824
 #endif
 
 #if !defined(KC)
 #   define KC   384
 #endif
 
+struct yami_blas_ctx;
 
-extern void yami_gemm_f32(usize m, usize n, usize k,
+
+extern yami_blas_ctx *yami_blas_init(int n_workers) noexcept;
+extern void yami_blas_free(yami_blas_ctx *ctx) noexcept;
+
+extern int yami_blas_num_workers(const yami_blas_ctx *ctx) noexcept;
+
+extern void yami_gemm_f32(yami_blas_ctx *ctx,
+                          usize m, usize n, usize k,
                           const f32 *__restrict a, usize stride_a,
                           const f32 *__restrict b, usize stride_b,
-                          f32 *__restrict c, usize stride_c,
-                          void *work) noexcept;
+                          f32 *__restrict c, usize stride_c) noexcept;
 
-extern void yami_gevm_f32(usize n, usize k,
+extern void yami_gevm_f32(yami_blas_ctx *ctx,
+                          usize n, usize k,
                           const f32 *__restrict a,
                           const f32 *__restrict b, usize stride_b,
-                          f32 *__restrict c, void *work) noexcept;
+                          f32 *__restrict c) noexcept;
 
-extern void yami_gevm_f32_simd(usize n, usize k,
+extern void yami_gevm_f32_simd(yami_blas_ctx *ctx,
+                               usize n, usize k,
                                const f32 *__restrict a,
                                const f32 *__restrict b, usize stride_b,
-                               f32 *__restrict c, void *work) noexcept;
+                               f32 *__restrict c) noexcept;

@@ -1,11 +1,9 @@
 #include "yami.h"
 #include "yami_blas.h"
-#include <atomic>
 #include <cmath>
 #include <cstdarg>
 #include <cstring>
-#include <pthread.h>
-#include <sys/sysinfo.h>
+
 
 #if defined(YAMI_TRACE)
 #   include <vector>
@@ -113,38 +111,6 @@ static_assert(YAMI_DTYPES == 1, "YAMI_DTYPES != 1: update");
 
 using yami_dim_range = usize[YAMI_MAX_DIMS][2];
 
-enum yami_op : u8 {
-    YAMI_OP_GEMM,
-    YAMI_OP_GEVM,
-    YAMI_OP_DONE,
-};
-
-struct yami_task {
-    const f32 *__restrict xa;
-    const f32 *__restrict xb;
-    f32 *__restrict res;
-    usize n, k, stride_b;
-    // Counter shared between all the workers, used to determine whether they have finished or not.
-    std::atomic_int *progress_counter;
-    yami_op op;
-};
-
-// TODO: add an index for each worker
-struct yami_worker {
-    pthread_t id;
-    // The current implementation uses a spinlock in the main thread (0th thread) to wait for its workers to complete
-    // and a condition variable in said workers to wait for work.
-    // Performance-wise this is a suboptimal choice as there will inevitably be some OS-related delay between when the main thread signals
-    // and the worker actually receives that signal. This is not the case with a spinlock however the spinlock will cause
-    // higher utilization (all the cores will be maxed-out until the inference is done) since the workers are created only once
-    // and are utilized only (at least for now) to speed-up GEVM which means they are quite often idle.
-    // TODO: validate if this is actually still true
-    pthread_cond_t cond;
-    pthread_mutex_t mtx;
-    bool has_work;
-    yami_task task;
-};
-
 struct yami_obj {
     usize offset;
     usize nb;
@@ -209,10 +175,8 @@ struct yami_ctx {
     yami_trace_node *traces_table[YAMI_TRACE_NODES];
     f64 trace_start_time;
 #endif
-
     yami_mem_buffer *buffers[YAMI_SCOPES];
-    yami_worker *workers;
-    int n_workers;
+    yami_blas_ctx *blas_ctx;
     yami_scope scope;
 };
 
@@ -380,54 +344,7 @@ static yami_mem_buffer *yami_buffer_alloc(const usize nb) noexcept {
     return buff;
 }
 
-static void *yami_worker_thread(void *arg) noexcept {
-    yami_worker *self = (yami_worker *) arg;
 
-    yami_task *work;
-    bool exit = false;
-    while (true) {
-        pthread_mutex_lock(&self->mtx);
-        while (!self->has_work)
-            pthread_cond_wait(&self->cond, &self->mtx);
-
-        self->has_work = false;
-        pthread_mutex_unlock(&self->mtx);
-
-        // We don't need to hold the lock as the master thread will wait for completion before setting another task
-        work = &self->task;
-
-        switch (work->op) {
-            case YAMI_OP_GEMM: {
-                YAMI_LOG_ERR("YAMI_OP_GEMM not implemented!");
-                break;
-            }
-            case YAMI_OP_GEVM: {
-                yami_gevm_f32(work->n,
-                              work->k,
-                              work->xa,
-                              work->xb,
-                              work->stride_b,
-                              work->res,
-                              nullptr
-                );
-                work->progress_counter->fetch_add(1);
-                break;
-            }
-            case YAMI_OP_DONE: {
-                exit = true;
-                break;
-            }
-            default: {
-                YAMI_LOG_ERR("unknown op=%d", work->op);
-                break;
-            }
-        }
-        if (exit)
-            break;
-    }
-
-    pthread_exit(nullptr);
-}
 // ==============================================================================================================
 
 yami_ctx *yami_init(const yami_init_params params) noexcept {
@@ -456,44 +373,10 @@ yami_ctx *yami_init(const yami_init_params params) noexcept {
     ctx->buffers[LOCAL] = yami_buffer_alloc(scope_nb[LOCAL]);
     ctx->buffers[PRIVATE] = yami_buffer_alloc(scope_nb[PRIVATE]);
 
-    const int n_cpus = get_nprocs();
-    int n_workers = params.n_workers;
-    if (n_workers > n_cpus) {
-        YAMI_LOG_INFO("n_workers=%d > n_cpus=%d, the actual number of workers will be limited to n_cpus", n_workers, n_cpus);
-        n_workers = n_cpus;
-    } else if (n_workers < 0) {
-        n_workers = (int) (n_cpus * 0.5);
-    }
-
-    ctx->n_workers = n_workers;
-
-    if (n_workers > 1) {
-        ctx->workers = (yami_worker *) malloc((n_workers - 1) * sizeof(yami_worker));
-        // If we can, bind threads to even cores
-        const int restrict_even = n_workers <= (int) (n_cpus * 0.5) ? 2 : 1;
-        for (int i = 1; i < n_workers; ++i) {
-            yami_worker *worker = &ctx->workers[i-1];
-            pthread_mutex_init(&worker->mtx, nullptr);
-            pthread_cond_init(&worker->cond, nullptr);
-            worker->has_work = false;
-            pthread_create(&worker->id, nullptr, yami_worker_thread, worker);
-
-            // Set affinity
-            cpu_set_t cpu_set{};
-            CPU_ZERO(&cpu_set);
-            CPU_SET(i * restrict_even, &cpu_set);
-            pthread_setaffinity_np(worker->id, sizeof(cpu_set_t), &cpu_set);
-        }
-    }
-
-    // Set affinity for the main worker
-    cpu_set_t cpu_set{};
-    CPU_ZERO(&cpu_set);
-    CPU_SET(0, &cpu_set);
-    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpu_set);
+    ctx->blas_ctx = yami_blas_init(params.n_workers);
 
     YAMI_LOG_INFO("created new context %p: workers=%d GLOBAL=%ldMB LOCAL=%ldMB PRIVATE=%ldMB",
-                  (void *) ctx, ctx->n_workers,
+                  (void *) ctx, yami_blas_num_workers(ctx->blas_ctx),
                   (usize) YAMI_B_TO_MB(ctx->buffers[GLOBAL]->nb),
                   (usize) YAMI_B_TO_MB(ctx->buffers[LOCAL]->nb),
                   (usize) YAMI_B_TO_MB(ctx->buffers[PRIVATE]->nb)
@@ -516,27 +399,7 @@ void yami_free(yami_ctx *ctx) noexcept {
 
     yami_clear_traces(ctx);
 
-    if (ctx->n_workers > 1) {
-        for (int i = 1; i < ctx->n_workers; ++i) {
-            yami_worker *worker = &ctx->workers[i - 1];
-            pthread_mutex_lock(&worker->mtx);
-
-            worker->task.op = YAMI_OP_DONE;
-            worker->has_work = true;
-
-            pthread_cond_signal(&worker->cond);
-            pthread_mutex_unlock(&worker->mtx);
-        }
-
-        for (int i = 1; i < ctx->n_workers; ++i) {
-            yami_worker *worker = &ctx->workers[i - 1];
-            pthread_join(worker->id, nullptr);
-            pthread_mutex_destroy(&worker->mtx);
-            pthread_cond_destroy(&worker->cond);
-        }
-
-        free(ctx->workers);
-    }
+    yami_blas_free(ctx->blas_ctx);
 
     free(ctx);
 }
@@ -1166,15 +1029,11 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
     yami_tensor *res = yami_new_tensor(ctx, res_n_dim, &res_dim[YAMI_MAX_DIMS - res_n_dim]);
     yami_set_zero(res);
 
-    YAMI_ENTER_PRIVATE_SCOPE(ctx);
-    yami_mem_buffer *work_buff = yami_scope_buffer();
-
     YAMI_TENSOR_FIELDS(xa, 2);
     YAMI_TENSOR_FIELDS(xb, 2);
     YAMI_TENSOR_FIELDS(res, 2);
     YAMI_UNUSED(d2_xa), YAMI_UNUSED(d2_xb), YAMI_UNUSED(d2_res);
 
-    std::atomic_int progress{};
 #if defined(YAMI_TRACE)
     yami_trace trace{xa->dim, xb->dim, res->dim,
                      2 * xa_rows * xa_cols * xb_cols,
@@ -1192,51 +1051,17 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
 
             // M = 1 so this is vector times matrix
             if (xa_rows == 1) {
-                progress.store(1);
-
-                // Split N by n_workers
-                const usize n_work = xb_cols / ctx->n_workers;
-                // Remember that n_workers is at least 1, also the main thread should have at least
-                // n_work rows of B to work on
-                const usize leftover_n = xb_cols - (n_work * (ctx->n_workers - 1));
-
-                // Enqueue tasks for the workers
-                for (int i = 1; i < ctx->n_workers; ++i) {
-                    yami_worker *worker = &ctx->workers[i - 1];
-                    pthread_mutex_lock(&worker->mtx);
-
-                    yami_task *t = &worker->task;
-                    t->xa = xa_data;
-                    t->xb = &xb_data[(i - 1) * n_work * d2_stride_xb];
-                    t->res = &res_data[(i - 1) * n_work];
-                    t->k = xa_cols;
-                    t->n = n_work;
-                    t->stride_b = d2_stride_xb;
-                    t->progress_counter = &progress;
-                    t->op = YAMI_OP_GEVM;
-                    worker->has_work = true;
-
-                    pthread_cond_signal(&worker->cond);
-                    pthread_mutex_unlock(&worker->mtx);
-                }
-
-                // Do the leftover work on the main thread
-                yami_gevm_f32(leftover_n, xa_cols,
-                              xa_data,
-                              &xb_data[(ctx->n_workers - 1) * n_work * d2_stride_xb],
-                              d2_stride_xb,
-                              &res_data[(ctx->n_workers - 1) * n_work],
-                              nullptr
+                yami_gevm_f32(ctx->blas_ctx,
+                              xb_cols, xa_cols,
+                              xa_data, xb_data, d2_stride_xb,
+                              res_data
                 );
-                // Wait for the other threads
-                while (progress.load() != ctx->n_workers)
-                    ;
             } else {
-                yami_gemm_f32(xa_rows, xb_cols, xa_cols,
+                yami_gemm_f32(ctx->blas_ctx,
+                              xa_rows, xb_cols, xa_cols,
                               xa_data, d2_stride_xa,
                               xb_data, d2_stride_xb,
-                              res_data, d2_stride_res,
-                              (byte *) work_buff + sizeof(yami_mem_buffer)
+                              res_data, d2_stride_res
                 );
             }
         }
@@ -1246,7 +1071,6 @@ yami_tensor *yami_matmul(yami_ctx *ctx, const yami_tensor *__restrict xa,
     yami_trace_insert(ctx->traces_table, &trace);
 #endif
 
-    YAMI_EXIT_PRIVATE_SCOPE(ctx);
     return res;
 }
 // When performing vector operations on a tensor (such as add, multiply...) there are two possibilities:

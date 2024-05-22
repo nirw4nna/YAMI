@@ -145,6 +145,7 @@ extern "C" {
     extern yami_ctx *yami_init(yami_init_params params) noexcept;
     extern void yami_free(yami_ctx *ctx) noexcept;
     extern void yami_clear_ctx(yami_ctx *ctx) noexcept;
+    // ========================================================================
 
     // ================================= Misc =================================
     extern void yami_set_scope(yami_ctx *ctx, yami_scope scope) noexcept;
