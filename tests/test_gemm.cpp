@@ -26,7 +26,7 @@ static f32 max_diff(const f32 *A, const f32 *B, const int n) {
 
 int main() {
     // Compute C += AB^T where A=(m x k) and B=(k x n)
-    yami_blas_ctx *ctx = yami_blas_init(1);
+    yami_blas_ctx *ctx = yami_blas_init(-1);
 
     const int m = 6, n = 11008, k = 4096;
     const f64 flops = 2 * m * n * k;
@@ -56,12 +56,14 @@ int main() {
             const f64 start = yami_timer();
             yami_gemm_f32(ctx, m, n, k, a, k, b, k, c_yami, n);
             const f64 this_delay = yami_timer() - start;
-//            delay_t = this_delay > delay_t ? this_delay : delay_t;
+//            delay_yami = this_delay > delay_yami ? this_delay : delay_yami;
             delay_yami = this_delay < delay_yami ? this_delay : delay_yami;
         }
     }
 
-    printf("(%d,%d) x (%d,%d)\n  -> OpenBLAS took: %.2fms (%.2f GFLOPS)\n  -> YAMI took: %.2fms (%.2f GFLOPS)\n",
+    printf("(%d,%d) x (%d,%d)\n"
+           "  -> OpenBLAS took: %.2fms (%.2f GFLOPS)\n"
+           "  -> YAMI took: %.2fms (%.2f GFLOPS)\n",
            m, k, k, n,
            delay_blas * 1e3,
            flops / (delay_blas * 1e9),
@@ -69,10 +71,10 @@ int main() {
            flops / (delay_yami * 1e9)
     );
 
-    const f32 diff = max_diff(c_blas, c_yami, m*n);
+    const f32 diff_yami = max_diff(c_blas, c_yami, m*n);
 
-    printf("Max diff = %.2e\n",
-           diff
+    printf("Max diff YAMI = %.2e\n",
+           diff_yami
     );
 
     yami_blas_free(ctx);

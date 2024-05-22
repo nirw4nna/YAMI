@@ -24,15 +24,15 @@
 #   define MC   128
 #endif
 
-// If we are going to have a buffer for each worker keep in mind that the total number of buffers cannot exceed
-// the L3 size!
 #if !defined(NC)
-#   define NC   2824
+//#   define NC   2824
+#   define NC   96
 #endif
 
 #if !defined(KC)
 #   define KC   384
 #endif
+
 
 struct yami_blas_ctx;
 
@@ -53,9 +53,3 @@ extern void yami_gevm_f32(yami_blas_ctx *ctx,
                           const f32 *__restrict a,
                           const f32 *__restrict b, usize stride_b,
                           f32 *__restrict c) noexcept;
-
-extern void yami_gevm_f32_simd(yami_blas_ctx *ctx,
-                               usize n, usize k,
-                               const f32 *__restrict a,
-                               const f32 *__restrict b, usize stride_b,
-                               f32 *__restrict c) noexcept;
