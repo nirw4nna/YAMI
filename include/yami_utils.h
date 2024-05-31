@@ -31,10 +31,12 @@ static constexpr const char* YAMI_TOKENIZERS[2] = {
 };
 
 struct yami_mmap {
-    explicit yami_mmap(const char *file);
+    // mmap has alignment requirements so, since the tokenizer is actually quite small compared
+    // to the weights just mmap the entire file and add the weights offset to the returned pointer
+    yami_mmap(const char *yami_file, usize offset);
     ~yami_mmap();
 
-    size file_size;
+    size mapping_size;
     void *data;
 };
 
@@ -61,8 +63,7 @@ struct yami_model_settings {
     int n_workers;
     f32 temperature;
     std::string prompt;
-    std::string model_file;
-    std::string tokenizer_file;
+    std::string yami_file;
     bool use_mmap;
 };
 
@@ -109,6 +110,8 @@ struct yami_perf_metrics {
 };
 
 struct yami_bpe_tokenizer {
+    static constexpr int eos_id = 50256;
+
     yami_bpe_tokenizer(const std::vector<std::string> &bpe_pairs,
                        const std::vector<std::string> &encoder);
 
@@ -175,8 +178,7 @@ struct yami_token {
 
 extern void yami_load_model(yami_ctx *ctx,
                             yami_model *model,
-                            const char *model_file,
-                            const char *tokenizer_file,
+                            const char *yami_file,
                             bool use_mmap) noexcept;
 
 extern void yami_arg_parse(int argc, char **argv,

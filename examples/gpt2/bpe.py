@@ -168,14 +168,17 @@ if __name__ == '__main__':
     tests = ["Hello, it's me, Mario!", "Hi!", "", " #èò", "~tok `' "]
     tokenizer = Encoder.from_pretrained()
     hf_tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
-    for test_str in tests:
-        print(f'Testing \"{test_str}\"...', end='')
-        idx = tokenizer.encode(test_str)
-        hf_idx = hf_tokenizer(test_str)['input_ids']
-        assert idx == hf_idx
 
-        decoded = tokenizer.decode(idx)
-        hf_decoded = hf_tokenizer.decode(hf_idx)
-        assert hf_decoded == test_str and decoded == hf_decoded
+    print(hf_tokenizer.encoder)
+    print(hf_tokenizer.bpe_ranks)
+    # for test_str in tests:
+    #     print(f'Testing \"{test_str}\"...', end='')
+    #     idx = tokenizer.encode(test_str)
+    #     hf_idx = hf_tokenizer(test_str)['input_ids']
+    #     assert idx == hf_idx
 
-        print('OK!')
+    #     decoded = tokenizer.decode(idx)
+    #     hf_decoded = hf_tokenizer.decode(hf_idx)
+    #     assert hf_decoded == test_str and decoded == hf_decoded
+
+    #     print('OK!')

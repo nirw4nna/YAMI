@@ -9,7 +9,6 @@ struct llama_hparams {
     u32 n_layers;
     u32 n_heads;
     u32 vocab_size;
-    u32 multiple_of;
     f32 norm_eps;
     u32 max_seq_len;
 };
@@ -32,8 +31,7 @@ struct llama_model {
         yami_load_model(
                 ctx,
                 &ym,
-                settings->model_file.c_str(),
-                settings->tokenizer_file.c_str(),
+                settings->yami_file.c_str(),
                 settings->use_mmap
         );
         YAMI_ASSERT(ym.type == yami_models::LLAMA && ym.tokenizer == yami_tokenizers::SP);
@@ -76,8 +74,8 @@ struct llama_model {
         YAMI_LOG_INFO("attention heads\t= %d", hparams.n_heads);
         YAMI_LOG_INFO("embedding size\t= %d", hparams.emb_size);
         YAMI_LOG_INFO("vocab size\t\t= %d", hparams.vocab_size);
-        YAMI_LOG_INFO("multiple of\t= %d", hparams.multiple_of);
         YAMI_LOG_INFO("max sequence len\t= %d", hparams.max_seq_len);
+        YAMI_LOG_INFO("norm eps\t\t= %.1e", (f64) hparams.norm_eps);
         YAMI_LOG_INFO("KV cache size\t= %ld MB", (usize) YAMI_B_TO_MB(kv_ne * 2 * hparams.n_layers * sizeof(f32)));
         yami_mem_usage(ctx);
         metrics.model_memory = yami_used_mem(ctx);
@@ -126,10 +124,12 @@ int main(int argc, char **argv) {
     std::vector<int> pos;
     int ctx_size = 0;
 
+    const f32 norm_eps = llama.hparams.norm_eps;
     const int n_heads = (int) llama.hparams.n_heads;
     const int vocab_size = (int) llama.hparams.vocab_size;
     const int head_size = (int) llama.hparams.emb_size / n_heads;
     const f32 scale = 1.f / std::sqrt((f32) head_size);
+
     for (int i = 0; i < settings.n_tokens; ++i) {
         yami_clear_ctx(ctx);
         yami_clear_traces(ctx);
@@ -149,7 +149,7 @@ int main(int argc, char **argv) {
 
         yami_tensor *cur;
         for (const auto &block : llama.h) {
-            yami_tensor *x = yami_rms_norm(ctx, block.attn_norm, block_in);
+            yami_tensor *x = yami_rms_norm(ctx, block.attn_norm, block_in, norm_eps);
 
             // Attention layer
             {
@@ -234,7 +234,7 @@ int main(int argc, char **argv) {
 
             // Feed Forward layer
             {
-                cur = yami_rms_norm(ctx, block.ff_norm, in_ff);
+                cur = yami_rms_norm(ctx, block.ff_norm, in_ff, norm_eps);
 
                 yami_tensor *x_w3 = yami_matmul(ctx, cur, block.ff_w3);
                 cur = yami_matmul(ctx, cur, block.ff_w1);
@@ -250,7 +250,7 @@ int main(int argc, char **argv) {
             yami_print_traces(ctx);
         }
 
-        block_in = yami_rms_norm(ctx, llama.norm, block_in);
+        block_in = yami_rms_norm(ctx, llama.norm, block_in, norm_eps);
         // Here we can also forward just the last position
         yami_tensor *logits = yami_matmul(ctx, block_in, llama.output);
 

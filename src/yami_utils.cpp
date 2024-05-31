@@ -7,50 +7,36 @@
 #include <fstream>
 #include <random>
 
-#define YAMI_HEADER_SIZE    ((usize) 6) // header + version number
+#define YAMI_HEADER_SIZE    ((usize) 5) // header + version number
 #define YAMI_VERSION        ((u8) 1)
 
 #define read(DST, siz, n, F) YAMI_ASSERT(fread(DST, siz, n, F) == (n))
 
-constexpr static u8 YAMI_TOKENIZER_HEADER[YAMI_HEADER_SIZE] = {0x59, 0x41, 0x4D, 0x49, 0x54, YAMI_VERSION};
-constexpr static u8 YAMI_MODEL_HEADER[YAMI_HEADER_SIZE] = {0x59, 0x41, 0x4D, 0x49, 0x4D, YAMI_VERSION};
+constexpr static u8 YAMI_FILE_HEADER[YAMI_HEADER_SIZE] = {0x59, 0x41, 0x4D, 0x49, YAMI_VERSION};
 
 
-static FILE *open_and_check(const char *yami_file, const u8 *header) noexcept {
+yami_mmap::yami_mmap(const char *yami_file, const usize offset) {
     FILE *f = fopen(yami_file, "rb");
     YAMI_ASSERT(f != nullptr);
 
-    u8 buff[YAMI_HEADER_SIZE];
-    read(buff, 1, YAMI_HEADER_SIZE, f);
-
-    if (memcmp(header, buff, YAMI_HEADER_SIZE) != 0) {
-        fclose(f);
-        YAMI_LOG_FATAL("error reading tokenizer from \"%s\"", yami_file);
-    }
-
-    return f;
-}
-
-yami_mmap::yami_mmap(const char *file) {
-    FILE *f = open_and_check(file, YAMI_MODEL_HEADER);
-
     fseek(f, 0, SEEK_END);
-    file_size = ftell(f);
+    mapping_size = ftell(f);
 
-    YAMI_LOG_INFO("loading %ld%s from \"%s\"",
-                  (size) ((file_size < 1'000'000) ? YAMI_B_TO_KB(file_size) : YAMI_B_TO_MB(file_size)),
-                  (file_size < 1'000'000) ? "KB" : "MB", file);
+    YAMI_LOG_INFO("loading %ld%s from YAMI file",
+                  (size) ((mapping_size < 1'000'000) ? YAMI_B_TO_KB(mapping_size) : YAMI_B_TO_MB(mapping_size)),
+                  (mapping_size < 1'000'000) ? "KB" : "MB");
 
     int fd = fileno(f);
-    data = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    data = mmap(nullptr, mapping_size, PROT_READ, MAP_PRIVATE, fd, 0);
     fclose(f);
     if (data == MAP_FAILED) {
-        YAMI_LOG_FATAL("error mapping \"%s\" to memory", file);
+        YAMI_LOG_FATAL("error mapping YAMI file to memory");
     }
+    data = (byte *) data + offset;
 }
 
 yami_mmap::~yami_mmap() {
-    munmap(data, file_size);
+    munmap(data, mapping_size);
 }
 
 static YAMI_INLINE void bytes_from_unicode(const int unicode, int *n, u8 *buff) noexcept {
@@ -481,80 +467,6 @@ void yami_llama_tokenizer::maybe_add(const std::vector<yami_sp_symbol> &symbols,
     }
 }
 
-static void load_tokenizer(yami_model *model, const char *tokenizer_file) noexcept {
-    FILE *f = open_and_check(tokenizer_file, YAMI_TOKENIZER_HEADER);
-
-    yami_tokenizers type;
-    read(&type, sizeof(yami_tokenizers), 1, f);
-
-    if (type >= yami_tokenizers::TOKENIZER_INVALID) {
-        fclose(f);
-        YAMI_LOG_FATAL("unknown tokenizer type %d", type);
-    }
-    model->tokenizer = type;
-
-    YAMI_LOG_INFO("loading %s tokenizer from \"%s\"", YAMI_TOKENIZERS[type], tokenizer_file);
-
-    std::string tok;
-    switch (model->tokenizer) {
-        case yami_tokenizers::BPE: {
-            u32 len;
-            u16 tok_size;
-            {
-                // Encoder
-                read(&len, sizeof(u32), 1, f);
-                model->encoder.reserve(len);
-                for (u32 i = 0; i < len; ++i) {
-                    tok.clear();
-                    read(&tok_size, sizeof(u16), 1, f);
-                    tok.resize(tok_size);
-                    read(tok.data(), 1, tok_size, f);
-                    model->encoder.emplace_back(tok);
-                }
-            }
-
-            {
-                // Vocab
-                read(&len, sizeof(u32), 1, f);
-                model->vocab.reserve(len);
-
-                for (u32 i = 0; i < len; ++i) {
-                    tok.clear();
-                    read(&tok_size, sizeof(u16), 1, f);
-                    tok.resize(tok_size);
-                    read(tok.data(), 1, tok_size, f);
-                    model->vocab.emplace_back(tok);
-                }
-            }
-            break;
-        }
-        case yami_tokenizers::SP: {
-            u32 vocab_size;
-            read(&vocab_size, sizeof(u32), 1, f);
-
-            model->vocab.reserve(vocab_size);
-            model->scores.reserve(vocab_size);
-
-            u16 tok_size;
-            f32 score;
-            for (u32 i = 0; i < vocab_size; ++i) {
-                tok.clear();
-                read(&tok_size, sizeof(u16), 1, f);
-                tok.resize(tok_size);
-                read(tok.data(), 1, tok_size, f);
-                read(&score, sizeof(f32), 1, f);
-                model->vocab.emplace_back(std::move(tok));
-                model->scores.emplace_back(score);
-            }
-            break;
-        }
-        default: {
-            YAMI_LOG_FATAL("unknown tokenizer %d", model->tokenizer);
-        }
-    }
-    fclose(f);
-}
-
 struct tensor_metadata {
     char label[YAMI_LABEL_SIZE];
     u8 dtype, n_dims;
@@ -563,64 +475,151 @@ struct tensor_metadata {
 };
 
 void yami_load_model(yami_ctx *ctx, yami_model *model,
-                     const char *model_file, const char *tokenizer_file,
-                     const bool use_mmap) noexcept {
-    load_tokenizer(model, tokenizer_file);
-    if (use_mmap)
-        model->mmap = std::make_unique<yami_mmap>(model_file);
+                     const char *yami_file, const bool use_mmap) noexcept {
+    YAMI_LOG_INFO("loading model from \"%s\"", yami_file);
 
-    FILE *f = open_and_check(model_file, YAMI_MODEL_HEADER);
+    // Open file and validate header
+    FILE *f = fopen(yami_file, "rb");
+    YAMI_ASSERT(f != nullptr);
 
-    yami_models type;
-    read(&type, sizeof(yami_models), 1, f);
+    u8 buff[YAMI_HEADER_SIZE];
+    read(buff, 1, YAMI_HEADER_SIZE, f);
 
-    if(type >= yami_models::MODEL_INVALID) {
+    if (memcmp(YAMI_FILE_HEADER, buff, YAMI_HEADER_SIZE) != 0) {
         fclose(f);
-        YAMI_LOG_FATAL("unknown model type %d", type);
+        YAMI_LOG_FATAL("error loading model from \"%s\"", yami_file);
     }
 
-    model->type = type;
+    {
+        // Load the tokenizer
+        yami_tokenizers type;
+        read(&type, sizeof(yami_tokenizers), 1, f);
 
-    YAMI_LOG_INFO("loading %s model from \"%s\"", YAMI_MODELS[type], model_file);
-
-    u16 hp_size;
-    read(&hp_size, sizeof(u16), 1, f);
-
-    read(model->hparams, 1, hp_size, f);
-
-    u16 n_tensors;
-    read(&n_tensors, sizeof(u16), 1, f);
-
-    std::vector<tensor_metadata> tensors_metadata;
-    tensors_metadata.resize(n_tensors);
-    for (u16 i = 0; i < n_tensors; ++i) {
-        read(&tensors_metadata[i].label, 1, 64, f);
-        read(&tensors_metadata[i].dtype, 1, 1, f);
-        read(&tensors_metadata[i].n_dims, 1, 1, f);
-        read(&tensors_metadata[i].dimensions, sizeof(u64), YAMI_MAX_DIMS, f);
-        read(&tensors_metadata[i].offset, sizeof(u64), 1, f);
-    }
-
-    std::unordered_map<std::string, yami_tensor *> tensors;
-    for (u16 i = 0; i < n_tensors; ++i) {
-        const tensor_metadata &metadata = tensors_metadata[i];
-        yami_tensor *tensor;
-        if (use_mmap) {
-            tensor = yami_new_tensor(ctx,
-                                     (int) metadata.n_dims,
-                                     metadata.dimensions,
-                                     metadata.label,
-                                     (byte *) model->mmap->data + metadata.offset);
-        } else {
-            tensor = yami_new_tensor(ctx,
-                                     (int) metadata.n_dims,
-                                     metadata.dimensions,
-                                     metadata.label);
-            read(tensor->data, sizeof(f32), tensor->ne, f);
+        if (type >= yami_tokenizers::TOKENIZER_INVALID) {
+            fclose(f);
+            YAMI_LOG_FATAL("unknown tokenizer type %d", type);
         }
-        tensors[tensor->label] = tensor;
+        model->tokenizer = type;
+
+        YAMI_LOG_INFO("loading %s tokenizer", YAMI_TOKENIZERS[type]);
+
+        std::string tok;
+        switch (model->tokenizer) {
+            case yami_tokenizers::BPE: {
+                u32 len;
+                u16 tok_size;
+                {
+                    // Encoder
+                    read(&len, sizeof(u32), 1, f);
+                    model->encoder.reserve(len);
+                    for (u32 i = 0; i < len; ++i) {
+                        tok.clear();
+                        read(&tok_size, sizeof(u16), 1, f);
+                        tok.resize(tok_size);
+                        read(tok.data(), 1, tok_size, f);
+                        model->encoder.emplace_back(tok);
+                    }
+                }
+
+                {
+                    // Vocab
+                    read(&len, sizeof(u32), 1, f);
+                    model->vocab.reserve(len);
+
+                    for (u32 i = 0; i < len; ++i) {
+                        tok.clear();
+                        read(&tok_size, sizeof(u16), 1, f);
+                        tok.resize(tok_size);
+                        read(tok.data(), 1, tok_size, f);
+                        model->vocab.emplace_back(tok);
+                    }
+                }
+                break;
+            }
+            case yami_tokenizers::SP: {
+                u32 vocab_size;
+                read(&vocab_size, sizeof(u32), 1, f);
+
+                model->vocab.reserve(vocab_size);
+                model->scores.reserve(vocab_size);
+
+                u16 tok_size;
+                f32 score;
+                for (u32 i = 0; i < vocab_size; ++i) {
+                    tok.clear();
+                    read(&tok_size, sizeof(u16), 1, f);
+                    tok.resize(tok_size);
+                    read(tok.data(), 1, tok_size, f);
+                    read(&score, sizeof(f32), 1, f);
+                    model->vocab.emplace_back(std::move(tok));
+                    model->scores.emplace_back(score);
+                }
+                break;
+            }
+            default: {
+                YAMI_LOG_FATAL("unknown tokenizer %d", model->tokenizer);
+            }
+        }
     }
-    model->tensors = std::move(tensors);
+    {
+        // Load model meta
+        yami_models type;
+        read(&type, sizeof(yami_models), 1, f);
+
+        if(type >= yami_models::MODEL_INVALID) {
+            fclose(f);
+            YAMI_LOG_FATAL("unknown model type %d", type);
+        }
+
+        model->type = type;
+
+        YAMI_LOG_INFO("loading %s model", YAMI_MODELS[type]);
+
+        u16 hp_size;
+        read(&hp_size, sizeof(u16), 1, f);
+
+        read(model->hparams, 1, hp_size, f);
+
+        u16 n_tensors;
+        read(&n_tensors, sizeof(u16), 1, f);
+
+        std::vector<tensor_metadata> tensors_metadata;
+        tensors_metadata.resize(n_tensors);
+        for (u16 i = 0; i < n_tensors; ++i) {
+            read(&tensors_metadata[i].label, 1, 64, f);
+            read(&tensors_metadata[i].dtype, 1, 1, f);
+            read(&tensors_metadata[i].n_dims, 1, 1, f);
+            read(&tensors_metadata[i].dimensions, sizeof(u64), YAMI_MAX_DIMS, f);
+            read(&tensors_metadata[i].offset, sizeof(u64), 1, f);
+        }
+
+        if (use_mmap) {
+            model->mmap = std::make_unique<yami_mmap>(yami_file, ftell(f));
+        }
+
+        // Load tensors data
+        std::unordered_map<std::string, yami_tensor *> tensors;
+        for (u16 i = 0; i < n_tensors; ++i) {
+            const tensor_metadata &metadata = tensors_metadata[i];
+            yami_tensor *tensor;
+            if (use_mmap) {
+                tensor = yami_new_tensor(ctx,
+                                         (int) metadata.n_dims,
+                                         metadata.dimensions,
+                                         metadata.label,
+                                         (byte *) model->mmap->data + metadata.offset);
+            } else {
+                tensor = yami_new_tensor(ctx,
+                                         (int) metadata.n_dims,
+                                         metadata.dimensions,
+                                         metadata.label);
+                read(tensor->data, sizeof(f32), tensor->ne, f);
+            }
+            tensors[tensor->label] = tensor;
+        }
+        model->tensors = std::move(tensors);
+    }
+
     fclose(f);
 }
 
@@ -655,8 +654,6 @@ void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexce
     settings->n_workers = -1;
     settings->n_tokens = 100;
     settings->temperature = 1.f;
-    settings->model_file = "yami_model.bin";
-    settings->tokenizer_file = "yami_tokenizer.bin";
     settings->main_ctx_size = 3*1024*1024*1024L;
     settings->scratch_ctx_size = 1024*1024*1024L;
     settings->seed = std::random_device()();
@@ -686,9 +683,7 @@ void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexce
                 }
                 settings->top_k = top_k;
             } else if (strcmp("-m", argv[i]) == 0 || strcmp("--model", argv[i]) == 0) {
-                settings->model_file = argv[++i];
-            } else if (strcmp("-T", argv[i]) == 0 || strcmp("--tokenizer", argv[i]) == 0) {
-                settings->tokenizer_file = argv[++i];
+                settings->yami_file = argv[++i];
             } else if (strcmp("-s", argv[i]) == 0 || strcmp("--seed", argv[i]) == 0) {
                 const usize seed = (usize) ::strtol(argv[++i], nullptr, 10);
                 if (errno == ERANGE || errno == EINVAL) {
@@ -716,8 +711,7 @@ void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexce
             printf("  -w, --workers\t\tNumber of workers to use (default=nproc() / 2).\n");
             printf("  -t, --temp\t\tModel temperature (default=1.0).\n");
             printf("  -k, --top-k\t\tTop k sampling (default=disabled).\n");
-            printf("  -m, --model\t\tPath to the model file (default=yami_model.bin).\n");
-            printf("  -T, --tokenizer\tPath to the model file (default=yami_tokenizer.bin).\n");
+            printf("  -m, --model\t\tPath to the model file.\n");
             printf("  -s, --seed\t\tSeed to use for generation (default=time).\n");
             printf("  -M, --main-mem\tMemory to allocate for the main context, must be enough to store the model weights (default=1G).\n");
             printf("  -S, --scratch-mem\tMemory to allocate for the scratch context used to store intermediate results (default=1G).\n");
@@ -729,6 +723,10 @@ void yami_arg_parse(int argc, char **argv, yami_model_settings *settings) noexce
 
     if (settings->prompt.empty()) {
         YAMI_LOG_FATAL("missing input prompt");
+    }
+
+    if (settings->yami_file.empty()) {
+        YAMI_LOG_FATAL("missing model file");
     }
 }
 

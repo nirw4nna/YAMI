@@ -4,7 +4,6 @@
 #include <cstdarg>
 #include <cstring>
 
-
 #if defined(YAMI_TRACE)
 #   include <vector>
 #   include <algorithm>
@@ -236,24 +235,24 @@ static YAMI_INLINE void yami_internal_c_vec_div(f32 *out, const f32 c,
 #if defined(YAMI_TRACE)
 static int yami_trace_hash(const yami_trace *trace) noexcept {
     // Very simple djb2-like hashing function
-    int hash = 5381;
+    unsigned long hash = 5381;
 
-    hash = ((hash << 5) + hash) + trace->kernel;
-    hash = ((hash << 5) + hash) + trace->dtype;
-    hash = ((hash << 5) + hash) + (int) trace->in_dims[0][0];
-    hash = ((hash << 5) + hash) + (int) trace->in_dims[0][1];
-    hash = ((hash << 5) + hash) + (int) trace->in_dims[0][2];
-    hash = ((hash << 5) + hash) + (int) trace->in_dims[0][3];
-    hash = ((hash << 5) + hash) + (int) trace->in_dims[1][0];
-    hash = ((hash << 5) + hash) + (int) trace->in_dims[1][1];
-    hash = ((hash << 5) + hash) + (int) trace->in_dims[1][2];
-    hash = ((hash << 5) + hash) + (int) trace->in_dims[1][3];
-    hash = ((hash << 5) + hash) + (int) trace->out_dim[0];
-    hash = ((hash << 5) + hash) + (int) trace->out_dim[1];
-    hash = ((hash << 5) + hash) + (int) trace->out_dim[2];
-    hash = ((hash << 5) + hash) + (int) trace->out_dim[3];
+    hash = ((hash << 5) + hash) + (unsigned long) trace->kernel;
+    hash = ((hash << 5) + hash) + (unsigned long) trace->dtype;
+    hash = ((hash << 5) + hash) + (unsigned long) trace->in_dims[0][0];
+    hash = ((hash << 5) + hash) + (unsigned long) trace->in_dims[0][1];
+    hash = ((hash << 5) + hash) + (unsigned long) trace->in_dims[0][2];
+    hash = ((hash << 5) + hash) + (unsigned long) trace->in_dims[0][3];
+    hash = ((hash << 5) + hash) + (unsigned long) trace->in_dims[1][0];
+    hash = ((hash << 5) + hash) + (unsigned long) trace->in_dims[1][1];
+    hash = ((hash << 5) + hash) + (unsigned long) trace->in_dims[1][2];
+    hash = ((hash << 5) + hash) + (unsigned long) trace->in_dims[1][3];
+    hash = ((hash << 5) + hash) + (unsigned long) trace->out_dim[0];
+    hash = ((hash << 5) + hash) + (unsigned long) trace->out_dim[1];
+    hash = ((hash << 5) + hash) + (unsigned long) trace->out_dim[2];
+    hash = ((hash << 5) + hash) + (unsigned long) trace->out_dim[3];
 
-    return hash % YAMI_TRACE_NODES;
+    return (int) (hash % YAMI_TRACE_NODES);
 }
 
 // If trace is already there, update the counters otherwise insert a new node.
@@ -366,8 +365,6 @@ yami_ctx *yami_init(const yami_init_params params) noexcept {
         scope_nb[LOCAL] = (usize) ((f64) params.nb * 0.1);
         scope_nb[PRIVATE] = (usize) ((f64) params.nb * 0.1);
     }
-
-    // TODO: make sure we allocated enough memory in the private buffer for packed_a and packed_b
 
     ctx->buffers[GLOBAL] = yami_buffer_alloc(scope_nb[GLOBAL]);
     ctx->buffers[LOCAL] = yami_buffer_alloc(scope_nb[LOCAL]);

@@ -8,20 +8,12 @@ from torch.autograd import profiler
 import time
 from dataclasses import dataclass
 
-import sys
-from pathlib import Path
-
-sys.path.append(str(Path(__file__).parent.parent))
-# Simple trick to import a file from outside the default path.
-# To enable Pylance add this also to "Python > Analysis > Extra Paths"
-from convert_yami import *
-
 
 _MODEL_TYPE = 'gpt2'
 
 
 @dataclass
-class GPT2Hparams(Hparams):
+class GPT2Hparams:
    # default hyperparameters for GPT-2 small
    n_layers: int = 12
    n_heads: int = 12
@@ -145,16 +137,6 @@ class GPT(nn.Module):
 
         return my_model
     
-    @staticmethod
-    def export(model_file: str, tokenizer_file: str):
-        hparams = GPT2Hparams()
-        model = GPT.from_hf(hparams)
-        model.eval()
-        tokenizer = Encoder.from_pretrained()
-        export_model(model_file, Model.GPT2, model.state_dict(), hparams,
-                     ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight', 'lm_head.weight'])
-        export_tokenizer(tokenizer_file, Tokenizer.BPE, encoder=tokenizer.encoder, vocab=tokenizer.bpe_ranks)
-
     def forward(self, idx):
         B, T = idx.shape
         tok_emb = self.transformer.wte(idx)
@@ -204,7 +186,6 @@ class GPT(nn.Module):
 
 
 if __name__ == '__main__':
-    # GPT.export('yami_model.bin', 'yami_tokenizer.bin')
     gpt = GPT2LMHeadModel.from_pretrained(_MODEL_TYPE)
     n_tokens = 100
     gpt.eval()

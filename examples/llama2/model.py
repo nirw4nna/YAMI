@@ -9,14 +9,8 @@ from typing import Dict, Tuple
 import math
 import time
 
-sys.path.append(str(Path(__file__).parent.parent))
-# Simple trick to import a file from outside the default path.
-# To enable Pylance add this also to "Python > Analysis > Extra Paths"
-from convert_yami import *
-
 # Relative path to the folder obtained by using the 'download.sh' script at https://github.com/facebookresearch/llama
 _MODEL_FOLDER = 'llama-2-7b'
-_EXPORT = False
 
 # Implementation heavily inspired by the great https://github.com/karpathy/llama2.c
 
@@ -218,49 +212,24 @@ class LlamaModel(nn.Module):
 
         return idx
 
-    @staticmethod
-    def export(model_file: str, tokenizer_file: str):
-        model_dict, params = load_from_meta(_MODEL_FOLDER)
-        hparams = LlamaHparams.from_meta(params, model_dict['tok_embeddings.weight'].shape[0])
-        weights_to_transpose = ['output.weight']
-        # TODO: `to_ignore` breaks import with mmap
-        # weights_to_ignore = ['rope.freqs']
-        for i in range(hparams.n_layers):
-            weights_to_transpose.append(f'layers.{i}.attention.wq.weight')
-            weights_to_transpose.append(f'layers.{i}.attention.wk.weight')
-            weights_to_transpose.append(f'layers.{i}.attention.wv.weight')
-            weights_to_transpose.append(f'layers.{i}.attention.wo.weight')
-            weights_to_transpose.append(f'layers.{i}.feed_forward.w1.weight')
-            weights_to_transpose.append(f'layers.{i}.feed_forward.w2.weight')
-            weights_to_transpose.append(f'layers.{i}.feed_forward.w3.weight')
-
-        export_tokenizer(tokenizer_file, Tokenizer.SP, in_model='examples/llama2/tokenizer.model')
-        export_model(model_file, Model.LLAMA, model_dict, hparams, to_transpose=weights_to_transpose)
-
-
 if __name__ == '__main__':
-    if _EXPORT:
-        LlamaModel.export('yami_model.bin', 'yami_tokenizer.bin')
-    else:
-        model_dict, params = load_from_meta(_MODEL_FOLDER)
-        hparams = LlamaHparams.from_meta(params, model_dict['tok_embeddings.weight'].shape[0])
-        model = LlamaModel(hparams)
-        model.load_state_dict(model_dict, strict=False)
-        del model_dict
+    model_dict, params = load_from_meta(_MODEL_FOLDER)
+    hparams = LlamaHparams.from_meta(params, model_dict['tok_embeddings.weight'].shape[0])
+    model = LlamaModel(hparams)
+    model.load_state_dict(model_dict, strict=False)
+    del model_dict
 
-        model.eval()
-        print('LLaMA2 model loaded successfully!')
-
-        tokenizer = LlamaTokenizer('examples/llama2/tokenizer.model')
-        prompt = 'Building a website can be done in ten simple steps:'
-        print(f'[In]: {prompt}')
-        
-        idx = tokenizer.encode(prompt, bos=True, eos=False)
-
-        MAX_TOKENS = 5
-        with torch.no_grad():
-            start = time.perf_counter()
-            response_tokens = model.generate(torch.tensor(idx, dtype=torch.long)[None, ...], max_new_tokens=MAX_TOKENS)
-            delay = time.perf_counter() - start
-            print(f'[Out]: {tokenizer.decode(response_tokens[0].tolist())}')
-            print(f'Took {round(delay, 2)}s to generate {MAX_TOKENS} tokens ({round(MAX_TOKENS / delay, 2)} tok/s)')        
+    model.eval()
+    print('LLaMA2 model loaded successfully!')
+    tokenizer = LlamaTokenizer('examples/llama2/llamatokenizer.model')
+    prompt = 'Javascript is a programming language designed'
+    print(f'[In]: {prompt}')
+    
+    idx = tokenizer.encode(prompt, bos=True, eos=False)
+    MAX_TOKENS = 10
+    with torch.no_grad():
+        start = time.perf_counter()
+        response_tokens = model.generate(torch.tensor(idx, dtype=torch.long)[None, ...], max_new_tokens=MAX_TOKENS)
+        delay = time.perf_counter() - start
+        print(f'[Out]: {tokenizer.decode(response_tokens[0].tolist())}')
+        print(f'Took {round(delay, 2)}s to generate {MAX_TOKENS} tokens ({round(MAX_TOKENS / delay, 2)} tok/s)')        
