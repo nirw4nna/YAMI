@@ -4,12 +4,8 @@ from torch.nn import functional as F
 import math
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from bpe import Encoder
-from torch.autograd import profiler
 import time
 from dataclasses import dataclass
-
-
-_MODEL_TYPE = 'gpt2'
 
 
 @dataclass
@@ -98,7 +94,7 @@ class TransformerBlock(nn.Module):
         return x
 
 
-class GPT(nn.Module):
+class GPT2(nn.Module):
     def __init__(self, hparams: GPT2Hparams):
         super().__init__()
         self.hparams = hparams
@@ -115,13 +111,13 @@ class GPT(nn.Module):
         print(f'Model has {round(n_params / 1e6)}M parameters')
 
     @classmethod
-    def from_hf(cls, hparams: GPT2Hparams()):
-        hf_model = GPT2LMHeadModel.from_pretrained(_MODEL_TYPE)
+    def from_hf(cls, hparams: GPT2Hparams = GPT2Hparams()):
+        hf_model = GPT2LMHeadModel.from_pretrained('gpt2')
         hf_data = hf_model.state_dict()
         # GPT2 uses Conv1D instead of a Linear layer which means we have to transpose the weights
         to_transpose = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
 
-        my_model = GPT(hparams)
+        my_model = GPT2(hparams)
         my_data = my_model.state_dict()
         assert len(my_data) == len(hf_data)
         for k, v in hf_data.items():
@@ -149,26 +145,12 @@ class GPT(nn.Module):
         logits = self.lm_head(x)
         return logits
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def generate(self, idx, max_new_tokens, temp=1.0, sample=True):
         for _ in range(max_new_tokens):
-            start_ = time.perf_counter()
             idx_real = idx if len(idx) < self.hparams.block_size else idx[:, -self.hparams.block_size:]
-            # with profiler.profile(record_shapes=True) as prof:
-            #     with profiler.record_function('model_inference'):
             logits = self(idx_real)
 
-            # print(prof.key_averages().table(sort_by="self_cpu_time_total", row_limit=5))
-            # matmul_events = [event for event in prof.function_events if "addmm" in event.name or "mm" in event.name]
-            # unique = set([e.name for e in prof.function_events])
-            # print(unique)
-            # print(f'\n\nNext token computation took {prof.self_cpu_time_total/1000.}ms:')
-            # total_time_us = 0
-            # for i, me in enumerate(prof.function_events):
-            #     print(f'\t{i}) {me.name} shapes={me.input_shapes} time={me.self_cpu_time_total_str}')
-            #     total_time_us += me.self_cpu_time_total
-
-            # print(f'Performing {len(matmul_events)} matmuls took {total_time_us / 1000.}ms')
             # Apply temperature to the last row of each bach
             logits = logits[:, -1, :] / temp
             # top_k?
@@ -180,20 +162,28 @@ class GPT(nn.Module):
             else:
                 _, idx_next = torch.topk(probs, k=1, dim=-1)
             idx = torch.cat((idx, idx_next), dim=1)
-            print(f'1 tok took {(time.perf_counter() - start_) * 1000.}ms')
 
         return idx
 
 
 if __name__ == '__main__':
-    gpt = GPT2LMHeadModel.from_pretrained(_MODEL_TYPE)
+    model = GPT2.from_hf()
     n_tokens = 100
-    gpt.eval()
+    
+    model.eval()
+
     tokenizer = Encoder.from_pretrained()
-    prompt = "Building a website can be done in ten simple steps"
-    encoded_prompt = [tokenizer.encode(prompt)]
-    idx = torch.tensor(encoded_prompt)
-    start = time.perf_counter()
-    resp = tokenizer.decode(gpt.generate(idx, max_new_tokens=n_tokens).cpu().squeeze().tolist())
-    print(f'GPT2: {resp}\n')
-    print(f'Time per token: {(time.perf_counter() - start) / n_tokens * 1000.}ms')
+    prompt = 'Javascript is a programming language designed'
+    print(f'[In]: {prompt}')
+    
+    MAX_TOKENS = 100
+
+    idx = tokenizer.encode(prompt)
+    with torch.no_grad():
+        start = time.perf_counter()
+
+        response_tokens = model.generate(torch.tensor(idx, dtype=torch.long)[None, ...], max_new_tokens=MAX_TOKENS)
+        delay = time.perf_counter() - start
+
+        print(f'[Out]: {tokenizer.decode(response_tokens[0].tolist())}')
+        print(f'Took {round(delay, 2)}s to generate {MAX_TOKENS} tokens ({round(MAX_TOKENS / delay, 2)} tok/s)')

@@ -8,14 +8,16 @@ from tokenizer import LlamaTokenizer
 from typing import Dict, Tuple
 import math
 import time
+import os
+import json
 
 # Relative path to the folder obtained by using the 'download.sh' script at https://github.com/facebookresearch/llama
-_MODEL_FOLDER = 'llama-2-7b'
+MODEL_FOLDER = 'examples/llama2/llama-2-7b'
 
 # Implementation heavily inspired by the great https://github.com/karpathy/llama2.c
 
 @dataclass
-class LlamaHparams(Hparams):
+class LlamaHparams:
     # default hyperparameters for the Llama 7B model
     dim: int = 4096
     n_layers: int = 32
@@ -212,8 +214,17 @@ class LlamaModel(nn.Module):
 
         return idx
 
+
+def load_from_meta():
+    with open(os.path.join(MODEL_FOLDER, 'params.json')) as f:
+        params = json.load(f)
+    
+    checkpoint_path = list(Path(MODEL_FOLDER).glob('consolidated.*.pth'))[0]
+    return torch.load(checkpoint_path), params
+    
+
 if __name__ == '__main__':
-    model_dict, params = load_from_meta(_MODEL_FOLDER)
+    model_dict, params = load_from_meta()
     hparams = LlamaHparams.from_meta(params, model_dict['tok_embeddings.weight'].shape[0])
     model = LlamaModel(hparams)
     model.load_state_dict(model_dict, strict=False)
@@ -221,7 +232,7 @@ if __name__ == '__main__':
 
     model.eval()
     print('LLaMA2 model loaded successfully!')
-    tokenizer = LlamaTokenizer('examples/llama2/llamatokenizer.model')
+    tokenizer = LlamaTokenizer(f'{MODEL_FOLDER}/tokenizer.model')
     prompt = 'Javascript is a programming language designed'
     print(f'[In]: {prompt}')
     
