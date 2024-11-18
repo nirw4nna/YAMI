@@ -47,7 +47,7 @@ Finally, to run the model simply do:
 To check all the options for each model use the `--help` flag.
 
 ### Notes on profiling
-To profile the kernels one can specify the `YAMI_TRACE` flag at compile time.
+To profile the kernels one can specify the `YAMI_TRACE=1` flag at compile time.
 This will instrument YAMI to take measurements of the execution time (as well as the total GFLOPS)
 of the most computationally intensive kernels such as GEMM, GEVM ecc...
 
