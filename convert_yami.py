@@ -418,15 +418,15 @@ def export_model(path: Path, dtype: Dtype, ctx_size: int, out_file: Path):
 
 if __name__ == '__main__':
     dtype_choices = [dtype.name.lower() for dtype in Dtype]
-    defult_dtype = Dtype.get_default().name.lower()
+    default_dtype = Dtype.get_default().name.lower()
     cli_parser = argparse.ArgumentParser(
         description='Conversion utility for YAMI',
     )
     cli_parser.add_argument('path', type=Path, help='Path to the folder containing the weights of the model')
     cli_parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose logging')
     cli_parser.add_argument('--out-type', choices=dtype_choices,
-                            default=defult_dtype,
-                            help=f'Data type to be used to export the model weights (default={defult_dtype})')
+                            default=default_dtype,
+                            help=f'Data type to be used to export the model weights (default={default_dtype})')
     cli_parser.add_argument('-o', '--output', type=Path, help='Path to the output file', default=None)
     cli_parser.add_argument('--ctx', type=int, default=512,
                             help='Maximum context size for this model (default=512)')
