@@ -1,82 +1,57 @@
 # YAMI
-Yet Another Machine Inference framework
+Yet Another Machine Inference framework.
 
-## Open topics
-**Core:**
-- ~~matmul up to 4 dim~~
-- ~~add, addv, mul, mulv, div, divv~~
-- ~~view (reshape)~~
-- ~~transpose~~
-- ~~mask~~
-- ~~tanh~~
-- ~~softmax~~
-- ~~GELU~~
-- ~~GPT-2~~
-- ~~RMSNorm~~
-- ~~RoPE~~
-- ~~SwiGLU~~
-- ~~LLaMA 2~~
-- >Optimizations to reach GGML level
-- >Quantization
-- >GEMM/GEVM parallel
-- Utility script to convert a PyTorch model from CLI
-- Move tokenizer and weights to the same file
+## Goal
+YAMI is a C++ library inspired by [ggml](https://github.com/ggerganov/ggml) to run Large Language Models (LLMs)
+locally on CPU.
 
-**Extra:**
-- ~~BPE (C++)~~
-- ~~LLaMA tokenizer (C++)~~
+The goal is not to build the best inference engine on the market but rather to learn about Large Language Models
+and optimisation topics in a way that is fun (at least for me!).
+For this reason no external library is used.
 
-## Refactoring
-There are few things I dislike about the current state of `YAMI`.
-First of, let's clarify the scope of this project: this is not ment to become the next `ggml` nor the next
-[insert name here] best framework to do inference of LLMs.
-`YAMI` was born with one simple objective: to become a playground for me to learn more about software optimizations.
+The thing I'm most proud of is the GEMM kernel I developed for YAMI following the famous
+[Anatomy of High-Performance Matrix Multiplication](https://www.cs.utexas.edu/~flame/pubs/GotoTOMS_revision.pdf)
+paper. Specifically, the kernel I developed on a Linux system running an AMD Ryzen 9 3900X CPU (AVX2) achieves
+similar performance as [OpenBLAS](https://www.openblas.net/).
 
-- The goal is to provide a fully self-contained, high performance implementation of popular LLMs on x86.
-  At least until we get there, it doesn't make sense to waste time thinking about CUDA, Metal, ARM, Rocm or whatever.
+## Requirements
+The requirements for YAMI are:
+- A modern C++ compiler with good support for C++17
+- GNU Make
+- Python >= 3.9
 
-- Same goes for the operating system: it doesn't make sense to worry about Windows, macOS or any other OS until there will be
-  a good reason to do so
+For the weights conversion script you'll have to install the requirements in the `requirements.txt` file:
+```bash
+python3 -m venv venv
+source venv/bin/activate
+python3 -m pip install -r requirements.txt
+```
 
-With this out of the way, let's try and fix some things in order to make this thing worth publishing:
-- ~~Move to `u64` for sizes~~
-- Verify the usefulness (profiling) of in-place operations, with `__restrict` and some vectorization we could probably
-  gain significant performance boost
-- ~~Remove the `extended_dim` abstraction, it's useless~~
-- ~~Switch to a multiple arenas scheme where each arena has its own lifetime~~
-- ~~Add a `contiguous` flag~~
-- ~~Use a decent GEMM, it's the main point of all this...~~
-- ~~Remove `pthread`, use `OpenMP`~~
-- I don't like the way scalar/vector types are handled in functions like `yami_div`
-- I don't like the way the indexes are computed in functions like `yami_sum`
+## Usage
+To use YAMI first build the model you want to inference, for example GPT-2:
+```bash
+make gpt2 YAMI_FAST=1
+```
+Next, if you haven't already done so, create a YAMI-compatible file with the weights of your model.
+There is a convenience script `convert_yami.py` to do so:
+```bash
+./convert_yami.py models/gpt2 -v
+```
+This will create a file like `yami_gpt2_fp32.bin` in the `models/gpt2` folder.
 
-## GPT2
-### Benchmarks:
-- Pytorch, on my machine, takes something like 75-80 ms to generate a single token
-  using multiple threads.
-- GGML takes something around 35-40 ms to generate a single token without doing anything extra fancy, this is very good
-  and also means we can do much better
-- Vanilla NumPy takes something around 120-200 ms to generate a single token
+Finally, to run the model simply do:
+```bash
+./gpt2 -i "<Input prompt here>" -m models/gpt2/yami_gpt2_fp32.bin
+```
 
-### TODO:
-- Perf
+To check all the options for each model use the `--help` flag.
 
-## LLaMA 2
-### TODO:
-- Perf:
-    - **90%** of the cycles are spent on `yami_gemm` and `yami_gevm` with GEMM taking up for almost all the cache-misses
-      (`yami_packB`). This means that a bigger model did not introduce anything extra in terms of complexity but rather
-      more operations to perform.
+### Notes on profiling
+To profile the kernels one can specify the `YAMI_TRACE` flag at compile time.
+This will instrument YAMI to take measurements of the execution time (as well as the total GFLOPS)
+of the most computationally intensive kernels such as GEMM, GEVM ecc...
 
-## Performance Roadmap
-Main topic:
-- Efficient parallelization with `OpenMP` or `pthread`
-- `GEMM` optimization
-
-Right now, I'd like to experiment a bit further with parallelization using `OpenMP` (and comparing it with `pthread`)
-before diving into quantization and more esoteric stuff.
-
-Another important aspect is to better define the framework we want to use to test performance.
+**Note:** doing so will cause a print to be issued after each layer of your model. This will for sure flood your stdout!
 
 ## Comparison w/ GGML
 Tested on my Ryzen 9 3900X w/ 64GB RAM running Linux `6.6.26-1-MANJARO` using `llama.cpp` commit `dd46dbc7`:
@@ -86,3 +61,5 @@ Tested on my Ryzen 9 3900X w/ 64GB RAM running Linux `6.6.26-1-MANJARO` using `l
 |  GPT-2 Small  |     FP32      |       ...       |    ...    |      ...      |  
 |   LLaMA2 7B   |     FP32      |    1.1 tok/s    | 0.7 tok/s |   0.5 tok/s   |
 
+## License
+MIT

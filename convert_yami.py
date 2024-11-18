@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 
+# Copyright (c) 2023-2024, Christian Gilli <christian.gilli11@gmail.com>
+# All rights reserved.
+#
+# This code is licensed under the terms of the MIT license
+# (https://opensource.org/license/mit).
+
 from enum import Enum
 import argparse
 import sys
 from pathlib import Path
 import os
 import logging
-from typing import List, IO, Any, Dict
+from typing import List, IO, Dict
 import torch
 import json
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, GPT2Config

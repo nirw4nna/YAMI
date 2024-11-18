@@ -1,3 +1,9 @@
+// Copyright (c) 2023-2024, Christian Gilli <christian.gilli11@gmail.com>
+// All rights reserved.
+//
+// This code is licensed under the terms of the MIT license
+// (https://opensource.org/license/mit).
+
 #pragma once
 
 // Collection of optimized BLAS-like routines for deep learning. All the non-trivial mathematical
